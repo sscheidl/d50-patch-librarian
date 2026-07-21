@@ -67,6 +67,14 @@ class BankEditorService:
         normalized = sorted(set(indices))
         self._change(lambda: self.project.clear_slots(normalized))
 
+    def initialize(
+        self,
+        indices: list[int] | set[int] | tuple[int, ...],
+        patch: D50Patch,
+    ) -> None:
+        normalized = sorted(set(indices))
+        self._change(lambda: self.project.initialize_slots(normalized, patch))
+
     def delete_and_shift(self, index: int) -> None:
         self._change(lambda: self.project.delete_and_shift(index))
 

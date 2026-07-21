@@ -8,6 +8,8 @@ from tkinter import ttk
 
 from domain.project import BankProject
 
+from .reverb_display import present_reverb_status
+
 SelectionCallback = Callable[[set[int]], None]
 IndexCallback = Callable[[int], None]
 MoveCallback = Callable[[int, int], None]
@@ -131,12 +133,12 @@ class BankMatrix(ttk.Frame):
                 background = "#f1f1f1"
                 foreground = "#777777"
             else:
-                warning = " !" if slot.patch.reverb_type >= 17 else ""
+                presentation = present_reverb_status(slot.patch.reverb_status)
                 text = (
-                    f"{slot_label}  R{slot.patch.reverb_type:02d}{warning}\n"
+                    f"{slot_label}  R{slot.patch.reverb_type:02d}{presentation.marker}\n"
                     f"{slot.patch.name or '(ohne Namen)'}"
                 )
-                background = "#fff3cd" if warning else "#ffffff"
+                background = presentation.background
                 foreground = "#202020"
             if index in self.selected:
                 background = "#cfe2ff"

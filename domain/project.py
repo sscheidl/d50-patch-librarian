@@ -9,6 +9,7 @@ from typing import Callable
 from d50.patch_codec import decode_patch
 
 from .bank import D50Bank
+from .enums import ReverbStatus
 from .patch import D50Patch
 from .reverb import D50Reverb
 
@@ -21,14 +22,14 @@ class ProjectExportError(ValueError):
 class PatchSlot:
     patch: D50Patch
     category: str = ""
-    rating: int = 0
+    rating: int = 1
     notes: str = ""
     original_position: int | None = None
     sequence: int = 0
 
     def __post_init__(self) -> None:
-        if not 0 <= self.rating <= 5:
-            raise ValueError("Bewertung muss zwischen 0 und 5 liegen")
+        if not 1 <= self.rating <= 6:
+            raise ValueError("Bewertung muss zwischen 1 und 6 liegen")
         if self.original_position is not None and not 0 <= self.original_position < 64:
             raise ValueError("Originalposition muss zwischen 0 und 63 liegen")
         if self.sequence < 0:
@@ -51,7 +52,7 @@ class BankProject:
     label: str = "Neue Bank"
     slots: list[PatchSlot | None] = field(default_factory=lambda: [None] * 64)
     reverbs: dict[int, D50Reverb] = field(default_factory=dict)
-    device_id: int = 0x10
+    device_id: int = 0x00
     source_bank_path: str | None = None
     project_path: str | None = None
     next_sequence: int = 0
@@ -98,6 +99,20 @@ class BankProject:
         return set(self.reverbs) == set(range(17, 33))
 
     @property
+    def reverb_conflict_count(self) -> int:
+        return sum(
+            slot is not None and slot.patch.reverb_status == ReverbStatus.CONFLICT
+            for slot in self.slots
+        )
+
+    @property
+    def reverb_missing_count(self) -> int:
+        return sum(
+            slot is not None and slot.patch.reverb_status == ReverbStatus.SOURCE_MISSING
+            for slot in self.slots
+        )
+
+    @property
     def dirty_title(self) -> str:
         return self.label or "Neue Bank"
 
@@ -142,9 +157,27 @@ class BankProject:
             source_device_id=patch.source_device_id,
             source_bank=patch.source_bank,
             source_slot=patch.source_slot,
-            reverbs=self.reverbs,
         )
-        return refreshed
+        if refreshed.reverb_type <= 16:
+            return refreshed
+        source_hash = patch.reverb_dependency_hash
+        target_reverb = self.reverbs.get(refreshed.reverb_type)
+        if source_hash is None or target_reverb is None:
+            return replace(
+                refreshed,
+                reverb_dependency_hash=source_hash,
+                reverb_status=ReverbStatus.SOURCE_MISSING,
+            )
+        status = (
+            ReverbStatus.RESOLVED
+            if source_hash == target_reverb.sha256
+            else ReverbStatus.CONFLICT
+        )
+        return replace(
+            refreshed,
+            reverb_dependency_hash=source_hash,
+            reverb_status=status,
+        )
 
     def refresh_all_reverb_context(self) -> None:
         self.slots = [
@@ -188,6 +221,16 @@ class BankProject:
         for index in indices:
             self._validate_slot_index(index)
             self.slots[index] = None
+
+    def initialize_slots(
+        self,
+        indices: list[int] | set[int] | tuple[int, ...],
+        patch: D50Patch,
+    ) -> None:
+        """Replace selected positions with fresh canonical patch entries."""
+        for index in sorted(set(indices)):
+            self._validate_slot_index(index)
+            self.slots[index] = self.new_entry(patch)
 
     def delete_and_shift(self, index: int) -> None:
         self._validate_slot_index(index)

@@ -8,6 +8,8 @@ from tkinter import ttk
 
 from domain.project import PatchSlot
 
+from .reverb_display import present_reverb_status
+
 
 class PatchDetails(ttk.LabelFrame):
     def __init__(
@@ -17,6 +19,7 @@ class PatchDetails(ttk.LabelFrame):
         on_apply: Callable[[str, int, str], None],
         on_rename: Callable[[], None],
         on_save_single: Callable[[], None],
+        on_preview: Callable[[], None],
     ) -> None:
         super().__init__(master, text="Patchdetails", padding=10)
         self.on_apply = on_apply
@@ -60,11 +63,11 @@ class PatchDetails(ttk.LabelFrame):
         self.category_entry.grid(row=separator_row + 1, column=1, sticky="ew", padx=(8, 0))
 
         ttk.Label(self, text="Bewertung:").grid(row=separator_row + 2, column=0, sticky="w", pady=5)
-        self.rating_var = tk.StringVar(value="0")
+        self.rating_var = tk.StringVar(value="1")
         self.rating_box = ttk.Combobox(
             self,
             textvariable=self.rating_var,
-            values=("0", "1", "2", "3", "4", "5"),
+            values=("1", "2", "3", "4", "5", "6"),
             state="readonly",
             width=5,
         )
@@ -82,7 +85,12 @@ class PatchDetails(ttk.LabelFrame):
         self.rename_button.pack(fill="x", pady=2)
         self.save_button = ttk.Button(action_frame, text="Als SysEx speichern", command=on_save_single)
         self.save_button.pack(fill="x", pady=2)
-        ttk.Button(action_frame, text="Vorhören (Phase 3)", state="disabled").pack(fill="x", pady=2)
+        self.preview_button = ttk.Button(
+            action_frame,
+            text="Im D-50 vorhören (experimentell)",
+            command=on_preview,
+        )
+        self.preview_button.pack(fill="x", pady=2)
 
         self.columnconfigure(1, weight=1)
         self.rowconfigure(separator_row + 4, weight=1)
@@ -99,7 +107,7 @@ class PatchDetails(ttk.LabelFrame):
             variable.set("—")
         self.variables["name"].set(message)
         self.category_var.set("")
-        self.rating_var.set("0")
+        self.rating_var.set("1")
         self.notes.configure(state="normal")
         self.notes.delete("1.0", tk.END)
         self._set_edit_state(False)
@@ -113,7 +121,7 @@ class PatchDetails(ttk.LabelFrame):
         self.variables["upper"].set(patch.upper_tone_name or "(ohne Namen)")
         self.variables["lower"].set(patch.lower_tone_name or "(ohne Namen)")
         self.variables["reverb"].set(f"{patch.reverb_type:02d}")
-        self.variables["status"].set(patch.reverb_status.value)
+        self.variables["status"].set(present_reverb_status(patch.reverb_status).label)
         self.variables["source"].set(patch.source_bank or "—")
         self.variables["original"].set(patch.slot_label or "—")
         self.variables["hash"].set(patch.sha256)
@@ -132,3 +140,4 @@ class PatchDetails(ttk.LabelFrame):
         self.apply_button.configure(state=state)
         self.rename_button.configure(state=state)
         self.save_button.configure(state=state)
+        self.preview_button.configure(state=state)

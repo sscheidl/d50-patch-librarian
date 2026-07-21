@@ -27,6 +27,11 @@ def test_phase2_window_builds_matrix_and_displays_bank(valid_bank_bytes: bytes) 
         assert app.bank_tab.project_name_var.get() == "GUI Golden"
         assert app.bank_tab.patch_count_var.get() == "64 belegt / 0 leer"
         assert app.bank_tab.reverb_var.get() == "Reverb-Basis 17–32 vollständig"
+        assert app.bank_tab.matrix.buttons[0].cget("background") == "#cfe2ff"
+        assert app.bank_tab.matrix.buttons[16].cget("background") == "#e2f0d9"
+        assert "Fest im D-50" in app.bank_tab.details.variables["status"].get()
+        assert app.midi_tab.device_id_var.get() == "00"
+        assert "GUI Golden" in app.midi_tab.bank_var.get()
+        assert not hasattr(app.midi_tab, "selection_var")
     finally:
         root.destroy()
-

@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.4.1 – 2026-07-21
+
+- Temporary-Buffer-Vorhören ist nach Hardwaretests ausdrücklich als experimentell/buggy markiert.
+- Beobachtet wurden sporadisch fehlende Partials oder Layer, unerwartete Keyboard-Splits und abweichende Klangbereiche gegenüber einem vollständigen Bankimport.
+- Die Oberfläche stellt klar, dass vollständiger Banktransfer und anschließender Patchwechsel derzeit die verlässlichere Klangreferenz sind.
+
+## 0.4.0 – 2026-07-21
+
+- Vollständige Banken mit 64 Patches und Reverbs 17–32 können über Rolands bidirektionalen Handshake gesendet und empfangen werden.
+- Bankübertragung verwendet WSD/DAT/EOD/ACK, prüft jeden Block, unterstützt Fortschritt und einen protokollgerechten Abbruch.
+- Der MIDI-Tab besitzt getrennte Ein- und Ausgangsports sowie klare B.Load-/B.Dump-Anweisungen.
+- Das redundante Feld für ausgewählte Patches und der GUI-Dry-Run wurden entfernt; Patch-Vorschau bleibt in Matrix und Patchdetails.
+- Temporary-Buffer-Senden wartet vor dem Schließen des Windows-MIDI-Ports und verwendet standardmäßig 50 ms Abstand.
+
+## 0.3.2 – 2026-07-21
+
+- Neue Projekte, der MIDI-Tab und Exporte ohne bekannte Quell-ID verwenden standardmäßig Device ID `00h` statt `10h`.
+
+## 0.3.1 – 2026-07-21
+
+- Vorhören in den Temporary Buffer erfolgt ohne störende Reverb-Rückfrage; Reverbprogramme 17–32 werden weiterhin nicht gesendet.
+
+## 0.3.0 – 2026-07-21
+
+- Die Librarian-Bewertung verwendet durchgehend die Skala 1–6; alte Projektwerte `0` werden beim Laden als `1` übernommen.
+- Eine kanonische, hörbare Vorlage `INIT SAW` mit einem aktiven Sägezahn-Partial, offenem Filter und neutraler Modulation ersetzt den bisherigen stillen Füllpatch.
+- `Neuer Patch`, `Platz leeren` und freie Slots beim Vollbankexport verwenden durchgehend dieselbe `INIT SAW`-Vorlage.
+- Freie Slots werden beim Vollbank-SysEx-Export automatisch gefüllt; der separate Auswahl-Dialog entfällt.
+- Das Arbeitsprojekt behält seine tatsächlich leeren Slots unverändert.
+- Reverbstatus wird in Matrix, Legende und Patchdetails als fest, vorhanden, fehlend oder konfliktbehaftet dargestellt.
+- Phase-3-MIDI-Ausgang mit Porttest, Device ID, DT1-Dry-Run und sicherem Temporary-Buffer-Senden ergänzt.
+- Automatisierte Fake-Port-Tests und manueller Hardwaretestplan ergänzt; Bank-, RQ1- und Reverb-Senden bleiben deaktiviert.
+
 ## 0.2.1 – 2026-07-21
 
 - D-50-Patch- und Tonenamen werden nun mit der tatsächlichen kompakten 6-Bit-Zeichentabelle statt als ASCII gelesen und geschrieben.

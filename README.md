@@ -1,11 +1,10 @@
 # D-50 Patch Librarian
 
-Windows-Patch-Librarian für den Roland D-50. Version `0.2.1` implementiert die im Bauplan
-definierten **Phasen 1 und 2**: einen strikt validierenden SysEx-Codec sowie einen grafischen
-8×8-Bankeditor mit Projekt-, Import-, Export- und Undo/Redo-Workflow.
+Windows-Patch-Librarian für den Roland D-50. Version `0.4.1` implementiert einen strikt
+validierenden SysEx-Codec, den grafischen 8×8-Bankeditor und die vollständige bidirektionale
+MIDI-Bankübertragung.
 
-Die Anwendung ist ein Librarian und Bankwerkzeug, **kein Soundparameter-Editor**. MIDI-Senden
-und -Empfangen folgen in Phase 3/4.
+Die Anwendung ist ein Librarian und Bankwerkzeug, **kein Soundparameter-Editor**.
 
 ## Grafischer Bankeditor in Phase 2
 
@@ -14,15 +13,19 @@ und -Empfangen folgen in Phase 3/4.
 - Einzelpatchdateien, ganze Patchordner und Patches aus einer zweiten Bank importieren
 - Patches per Mausziehen oder `Alt+Pfeil` verschieben/tauschen
 - Rename, Sort A–Z/Z–A, Kategorie, Reverb und Originalreihenfolge
-- Copy/Cut/Paste, Duplicate, Clear sowie Löschen und Nachrücken
+- Copy/Cut/Paste, Duplicate, `Neuer Patch`/`Platz leeren` mit kanonischem `INIT SAW` sowie Löschen und Nachrücken
 - mindestens 100 Undo-/Redo-Schritte
-- Kategorien, Bewertungen und Notizen pro Patch
+- Kategorien, Bewertungen von 1–6 und Notizen pro Patch
 - Projekte als `.d50proj` atomar speichern und laden
 - ausgewählte oder alle belegten Patches als Einzel-SysEx exportieren
-- vollständige Bank-SysEx exportieren; leere Slots werden nach ausdrücklicher Bestätigung mit
-  einem ausgewählten vorhandenen Patch gefüllt
+- vollständige Bank-SysEx exportieren; leere Slots werden automatisch mit dem eingebauten,
+  hörbaren `INIT SAW` gefüllt, ohne die leeren App-Slots im Arbeitsprojekt zu verändern
 - Reverbs 17–32 aus einer vollständigen Quellbank übernehmen
 - integrierter Diagnose-Tab
+- einen Patch über Matrix oder Patchdetails experimentell in den Temporary Buffer senden
+- vollständige Banken mit 64 Patches und Reverbs 17–32 per bestätigtem Roland-Handshake senden
+  und empfangen
+- verständliche Reverbfarben: fest, vorhanden, fehlend oder Konflikt
 
 Start:
 
@@ -83,8 +86,9 @@ python -m venv .venv
 python -m pip install -r requirements-dev.txt
 ```
 
-Der Phase-1-Codec selbst verwendet nur die Python-Standardbibliothek. `pytest` und
-`PyInstaller` werden nur für Tests beziehungsweise Builds benötigt.
+Der Codec selbst verwendet nur die Python-Standardbibliothek. Die Desktopanwendung
+benötigt für MIDI zusätzlich `mido` und `python-rtmidi`; `pytest` und `PyInstaller` werden nur
+für Tests beziehungsweise Builds benötigt.
 
 ## Diagnose-CLI
 
@@ -162,7 +166,7 @@ app/       CLI und Version
 domain/    unveränderliche Patch-, Bank- und Reverbmodelle
 d50/       Adressen, Frames, Prüfsumme, Validator, Klassifikator und Codecs
 services/  atomare Datei- und Exportoperationen
-midi/      reservierte, derzeit leere Grenze für Phase 3
+midi/      Temporary-Preview und bidirektionaler WSD/DAT/EOD/ACK-Bank-Handshake
 gui/       Hauptfenster, Bankmatrix, Details, Dialoge und Diagnose
 tests/     Unit-, Integrations- und Golden-Tests
 ```
@@ -183,20 +187,37 @@ da dort keine Lizenzdatei vorliegt und Phase 1 keinen MIDI-Backend-Code benötig
 
 ## Bekannte Grenzen
 
-- Noch kein verifizierter Initial-Patch. Beim Export einer teilgefüllten Bank muss deshalb ein
-  bereits vorhandener Patch nach ausdrücklicher Bestätigung als Füllpatch dienen.
-- Noch kein MIDI-Senden oder -Empfangen (Phasen 3 und 4).
-- D-50-Handshake-/RQ1-Nachrichten werden erkannt, aber nicht importiert.
+- Der kanonische `INIT SAW` ist strukturell getestet; sein Klang und alle neutralen Parameterwerte
+  werden beim nächsten Gerätetest noch einmal am realen D-50 geprüft.
+- **Temporary-Buffer-Vorhören ist derzeit buggy:** Obwohl die DT1-Daten angenommen werden, klingt
+  ein Patch am realen D-50 nicht immer wie nach einem vollständigen Bankimport. Beobachtet wurden
+  fehlende Partials/Layer, unerwartete Keyboard-Splits sowie sehr tiefe Klanganteile unterhalb einer
+  Split-Grenze. Das Phänomen ist nicht deterministisch; der vollständige Bankimport gilt als Referenz.
+- Der vollständige Bank-Handshake ist automatisiert simuliert, muss aber vor produktiver Nutzung
+  noch mit gesicherter Bank am realen D-50 geprüft werden.
+- RQ1-Read-back für einzelne Diagnosezwecke ist noch nicht Teil der Oberfläche.
 - Der Validator akzeptiert den von Roland für dieses Exclusive-Format dokumentierten
   Device-ID-Bereich `00h–1Fh`; die Quell-ID bleibt bei kanonischen Roundtrips erhalten.
-- Die Tests wurden ohne realen Roland D-50 ausgeführt. Es wird kein Hardwaretest als bestanden behauptet.
+- Die automatisierten Tests ersetzen keine vollständige Prüfung aller Funktionen am realen Roland D-50.
 
-## MIDI-Voraussetzungen für spätere Phasen
+## MIDI / Temporary Buffer und vollständige Banken
 
-Für Phase 3 sind `mido` und `python-rtmidi` als optionale Abhängigkeiten vorgesehen. Am D-50
-muss Exclusive aktiviert sein. Eine vollständige Bank darf später nur nach deutlicher
-Überschreibwarnung und bei deaktiviertem Memory Protect gesendet werden. `Dump into Buffer`
-wird ausschließlich die Temporary Area beschreiben und Reverb 17–32 nicht automatisch überschreiben.
+MIDI verwendet `mido` und `python-rtmidi`. Am D-50 muss Exclusive aktiviert sein. Der Benutzer
+muss Port und Device ID ausdrücklich auswählen; beim bloßen Anklicken eines Patches wird nichts
+gesendet. `Dump into Buffer` schreibt ausschließlich sieben Temporary-Area-DT1-Nachrichten mit
+standardmäßig 50 ms Abstand und einer zusätzlichen Abschlusswartezeit. Reverb 17–32 wird beim
+Vorhören nicht automatisch überschrieben. Der D-50 initialisiert dabei nach Hardwarebeobachtung
+nicht immer alle Partials, Layer und Key-Mode/Split-Zustände zuverlässig; diese Funktion ist daher
+ausdrücklich experimentell.
+
+Komplette Banken verwenden zwei MIDI-Kabel und Rolands bidirektionalen Handshake. Beim Senden
+bestätigt der D-50 jeden der 136 DAT-Blöcke, bevor die Anwendung fortfährt. Beim Empfang wird jeder
+Block geprüft und bestätigt; die Arbeitsbank wird erst nach vollständigen 34.688 Nutzdatenbytes
+ersetzt. Bank-Senden überschreibt die 64 internen Patchplätze und Reverbs 17–32 und verlangt daher
+Backup, ausgeschalteten Memory Protect und die ausdrückliche B.Load-Bestätigung am Gerät.
+
+Die manuellen Prüfabläufe stehen in [`HARDWARE_TEST.md`](HARDWARE_TEST.md) und
+[`BANK_TRANSFER_TEST.md`](BANK_TRANSFER_TEST.md).
 
 Protokollreferenz: [Roland D-05 Parameter Guide / D-50 MIDI Implementation](https://static.roland.com/assets/media/pdf/D-05_ParameterGuide_eng02_W.pdf)
 

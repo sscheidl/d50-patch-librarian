@@ -1,4 +1,4 @@
-D-50 Patch Librarian 0.2.1 – Phase 2
+D-50 Patch Librarian 0.4.1 – Phasen 2 bis 4
 ====================================
 
 Start:
@@ -15,7 +15,16 @@ Schnelltest:
 
 Teilgefüllte Banken:
   Für den Bankexport werden Reverbs 17–32 aus einer vollständigen Quellbank benötigt.
-  Leere Slots werden nur nach Bestätigung mit einem vorhandenen Patch gefüllt.
+  Leere Slots werden beim Bankexport automatisch mit dem hörbaren INIT SAW gefüllt.
+  Neuer Patch und Platz leeren verwenden ebenfalls diese eine kanonische Vorlage.
 
-Noch nicht enthalten:
-  MIDI-Senden/Empfangen und Dump into Buffer (Phase 3/4).
+MIDI / Temporary Buffer:
+  Ausgang und Device ID immer bewusst auswählen; Vorschau erfolgt aus Matrix oder Patchdetails.
+  ACHTUNG: Vorschau ist experimentell/buggy. Partials, Layer und Keyboard-Splits können gegenüber
+  einem vollständigen Bankimport falsch initialisiert werden.
+
+MIDI / vollständige Bank:
+  Für den Handshake müssen MIDI IN und OUT verbunden und beide M8U-Ports ausgewählt sein.
+  Senden überschreibt 64 interne Patches sowie Reverbs 17–32: vorher Backup und Memory Protect OFF.
+  Empfang zuerst im Tool starten, danach am D-50 B.Dump auslösen.
+  Der vollständige Bank-Handshake ist simuliert geprüft; der reale Hardwaretest steht noch aus.

@@ -6,6 +6,7 @@ import ctypes
 import os
 from pathlib import Path
 import sys
+import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
@@ -13,8 +14,24 @@ from app.i18n import tr
 from app.version import __version__
 from d50.bank_codec import parse_bank
 from d50.classifier import classify
+from d50.patch_codec import create_init_patch
 from domain.enums import DumpType
 from domain.project import BankProject
+from midi.bank_transfer import (
+    BankReceiveReport,
+    BankSendReport,
+    BankTransferCancelled,
+    receive_full_bank_handshake,
+    send_full_bank_handshake,
+)
+from midi.temporary_sender import (
+    MidiTransferError,
+    list_midi_input_ports,
+    list_midi_output_ports,
+    send_temporary_patch,
+    test_midi_input_port,
+    test_midi_output_port,
+)
 from services.bank_editor_service import BankEditorService
 from services.bank_file_service import (
     export_selected_patch_files,
@@ -38,6 +55,8 @@ class MainWindow:
         self.root = root
         self.editor = BankEditorService()
         self.selection: set[int] = {0}
+        self._bank_transfer_thread: threading.Thread | None = None
+        self._bank_cancel_event = threading.Event()
         self._configure_root()
         self._build_menu()
         self._build_toolbar()
@@ -86,8 +105,9 @@ class MainWindow:
         edit_menu.add_command(label="Ausschneiden", accelerator="Strg+X", command=self.cut)
         edit_menu.add_command(label="Einfügen", accelerator="Strg+V", command=self.paste)
         edit_menu.add_separator()
+        edit_menu.add_command(label="Neuer Patch (INIT SAW)", command=self.initialize_selected)
         edit_menu.add_command(label="Umbenennen", accelerator="F2", command=self.rename_selected)
-        edit_menu.add_command(label="Slot leeren", accelerator="Entf", command=self.clear_selected)
+        edit_menu.add_command(label="Platz leeren (INIT SAW)", accelerator="Entf", command=self.clear_selected)
         edit_menu.add_command(label="Löschen und nachrücken", command=self.delete_and_shift)
         menu.add_cascade(label="Bearbeiten", menu=edit_menu)
 
@@ -121,6 +141,7 @@ class MainWindow:
             ("Projekt speichern", self.save_project),
             ("Bank exportieren", self.export_bank),
             ("Patches exportieren", self.export_selected),
+            ("INIT SAW", self.initialize_selected),
         )
         for label, command in actions:
             ttk.Button(toolbar, text=label, command=command, style="Toolbar.TButton").pack(side="left", padx=2)
@@ -129,7 +150,7 @@ class MainWindow:
         self.undo_button.pack(side="left", padx=2)
         self.redo_button = ttk.Button(toolbar, text="Redo", command=self.redo, style="Toolbar.TButton")
         self.redo_button.pack(side="left", padx=2)
-        ttk.Label(toolbar, text="MIDI: Phase 3", foreground="#666666").pack(side="right", padx=8)
+        ttk.Label(toolbar, text="MIDI: Temporary Buffer", foreground="#666666").pack(side="right", padx=8)
 
     def _build_content(self) -> None:
         self.notebook = ttk.Notebook(self.root)
@@ -143,11 +164,20 @@ class MainWindow:
             on_metadata=self.apply_metadata,
             on_rename=self.rename_selected,
             on_save_single=self.save_selected_single,
+            on_preview=self.send_selected_to_buffer,
+            on_new_patch=self.initialize_selected,
             on_import_singles=self.import_singles,
             on_import_bank=self.import_from_bank,
             on_take_reverbs=self.take_reverbs_from_bank,
         )
-        self.midi_tab = MidiTransferTab(self.notebook)
+        self.midi_tab = MidiTransferTab(
+            self.notebook,
+            on_refresh_ports=self.refresh_midi_ports,
+            on_test_ports=self.test_selected_midi_ports,
+            on_send_bank=self.send_bank_to_d50,
+            on_receive_bank=self.receive_bank_from_d50,
+            on_cancel=self.cancel_bank_transfer,
+        )
         self.diagnostics_tab = DiagnosticsTab(self.notebook)
         self.notebook.add(self.bank_tab, text=tr("tab_bank"))
         self.notebook.add(self.midi_tab, text=tr("tab_midi"))
@@ -155,6 +185,7 @@ class MainWindow:
         ttk.Separator(self.root).pack(fill="x")
         self.status = StatusBar(self.root)
         self.status.pack(fill="x")
+        self.refresh_midi_ports(show_errors=False)
 
     def _bind_shortcuts(self) -> None:
         self.root.bind("<Control-n>", lambda _event: self.new_project())
@@ -188,7 +219,18 @@ class MainWindow:
         self.root.title(f"{tr('app_title')} v{__version__} — {self.project.label}{dirty}")
         self.undo_button.configure(state="normal" if self.editor.undo_stack.can_undo else "disabled")
         self.redo_button.configure(state="normal" if self.editor.undo_stack.can_redo else "disabled")
-        reverb = "Reverbs vollständig" if self.project.has_complete_reverbs else "Reverbs fehlen"
+        self.midi_tab.show_bank(
+            label=self.project.label,
+            occupied=self.project.occupied_count,
+            empty=self.project.empty_count,
+            reverbs_complete=self.project.has_complete_reverbs,
+        )
+        if self.project.reverb_conflict_count:
+            reverb = f"{self.project.reverb_conflict_count} Reverbkonflikt(e)"
+        elif self.project.reverb_missing_count:
+            reverb = f"{self.project.reverb_missing_count} Reverbquelle(n) unbekannt"
+        else:
+            reverb = "Reverbs vollständig" if self.project.has_complete_reverbs else "Reverbs fehlen"
         self.status.set(message, f"{self.project.occupied_count}/64 Patches · {reverb}")
 
     def _refresh_details(self) -> None:
@@ -453,7 +495,12 @@ class MainWindow:
             self._show_error("Reverb-Basis konnte nicht übernommen werden", exc, path)
 
     def export_bank(self) -> None:
-        fill_patch = None
+        filled_count = self.project.empty_count
+        fill_patch = (
+            create_init_patch(source_device_id=self.project.device_id)
+            if filled_count
+            else None
+        )
         if not self.project.has_complete_reverbs:
             messagebox.showerror(
                 "Bankexport blockiert",
@@ -461,24 +508,14 @@ class MainWindow:
                 parent=self.root,
             )
             return
-        if self.project.empty_count:
-            occupied = [index for index in sorted(self.selection) if self.project.slots[index] is not None]
-            if not occupied:
-                occupied = self.project.occupied_indices()[:1]
-            if not occupied:
-                messagebox.showerror("Bankexport blockiert", "Die Arbeitsbank enthält keinen Patch.", parent=self.root)
-                return
-            fill_index = occupied[0]
-            fill_patch = self.project.slots[fill_index].patch  # type: ignore[union-attr]
-            row, column = divmod(fill_index, 8)
-            if not messagebox.askyesno(
-                "Leere Slots auffüllen",
-                f"{self.project.empty_count} leere Slots werden im SysEx-Export mit "
-                f"'{fill_patch.name}' aus Slot {row + 1}-{column + 1} gefüllt.\n\n"
-                "Das Arbeitsprojekt behält seine leeren Slots. Fortfahren?",
-                parent=self.root,
-            ):
-                return
+        if (self.project.reverb_conflict_count or self.project.reverb_missing_count) and not messagebox.askyesno(
+            "Ungeklärte Reverbabhängigkeiten",
+            f"{self.project.reverb_conflict_count} Patch(es) besitzen einen Reverbkonflikt.\n"
+            f"{self.project.reverb_missing_count} Patch(es) besitzen keine bekannte Original-Reverbquelle.\n\n"
+            "Die Bank ist technisch vollständig, kann bei diesen Patches aber anders klingen. Trotzdem exportieren?",
+            parent=self.root,
+        ):
+            return
         path = filedialog.asksaveasfilename(
             parent=self.root,
             title="Vollständige D-50-Bank exportieren",
@@ -490,10 +527,15 @@ class MainWindow:
             return
         try:
             target = save_project_bank_file(self.project, path, fill_patch=fill_patch, overwrite=True)
-            self.refresh(f"Bank exportiert: {target.name}")
+            fill_note = f"\n{filled_count} freie Slots wurden als INIT SAW exportiert." if filled_count else ""
+            self.refresh(
+                f"Bank exportiert: {target.name}"
+                + (f" · {filled_count}× INIT SAW" if filled_count else "")
+            )
             messagebox.showinfo(
                 "Bank exportiert",
-                f"Vollständige D-50-Bank gespeichert:\n{target}\n\n64 Patches + Reverbs 17–32",
+                f"Vollständige D-50-Bank gespeichert:\n{target}\n\n"
+                f"64 Patches + Reverbs 17–32{fill_note}",
                 parent=self.root,
             )
         except Exception as exc:
@@ -606,17 +648,33 @@ class MainWindow:
             self._show_error("Einfügen nicht möglich", exc)
 
     def clear_selected(self) -> None:
-        occupied = [index for index in self.selection if self.project.slots[index] is not None]
-        if not occupied:
-            return
+        selected = sorted(self.selection)
+        occupied_count = sum(self.project.slots[index] is not None for index in selected)
         if not messagebox.askyesno(
-            "Slots leeren",
-            f"{len(occupied)} belegte(n) Slot(s) leeren?",
+            "Plätze auf INIT SAW setzen",
+            f"{len(selected)} ausgewählte(n) Platz/Plätze auf INIT SAW zurücksetzen?"
+            + (f"\n\nDabei werden {occupied_count} vorhandene Patch(es) ersetzt." if occupied_count else ""),
             parent=self.root,
         ):
             return
-        self.editor.clear(occupied)
-        self.refresh(f"{len(occupied)} Slot(s) geleert")
+        self._initialize_indices(selected)
+
+    def initialize_selected(self) -> None:
+        selected = sorted(self.selection)
+        occupied_count = sum(self.project.slots[index] is not None for index in selected)
+        if occupied_count and not messagebox.askyesno(
+            "Neuer Patch",
+            f"INIT SAW in {len(selected)} ausgewählte(n) Platz/Plätze einsetzen?\n\n"
+            f"Dabei werden {occupied_count} vorhandene Patch(es) ersetzt.",
+            parent=self.root,
+        ):
+            return
+        self._initialize_indices(selected)
+
+    def _initialize_indices(self, indices: list[int]) -> None:
+        init_patch = create_init_patch(source_device_id=self.project.device_id)
+        self.editor.initialize(indices, init_patch)
+        self.refresh(f"{len(indices)} Platz/Plätze auf INIT SAW gesetzt")
 
     def delete_and_shift(self) -> None:
         index = self._single_occupied_index()
@@ -700,11 +758,239 @@ class MainWindow:
         self.bank_tab.matrix.set_selection(self.selection, notify=False)
         self.refresh("Alle Slots ausgewählt")
 
+    def refresh_midi_ports(self, *, show_errors: bool = True) -> None:
+        try:
+            output_ports = list_midi_output_ports()
+            input_ports = list_midi_input_ports()
+            self.midi_tab.set_ports(output_ports, input_ports)
+            message = (
+                f"{len(output_ports)} MIDI-Ausgänge und {len(input_ports)} MIDI-Eingänge gefunden; "
+                "bitte die beiden tatsächlich mit dem D-50 verbundenen Ports auswählen."
+            )
+            if not output_ports or not input_ports:
+                message = "Für Bank-Handshake werden ein MIDI-Ausgang und ein MIDI-Eingang benötigt."
+            self.midi_tab.set_status(message)
+        except Exception as exc:
+            self.midi_tab.set_ports((), ())
+            self.midi_tab.set_status(f"MIDI nicht verfügbar: {exc}")
+            if show_errors:
+                self._show_error("MIDI-Ports konnten nicht gelesen werden", exc)
+
+    def test_selected_midi_ports(self) -> None:
+        try:
+            output_name, input_name, _device_id = self.midi_tab.selected_bank_settings()
+            test_midi_output_port(output_name)
+            test_midi_input_port(input_name)
+            message = (
+                f"Ausgang '{output_name}' und Eingang '{input_name}' lassen sich öffnen. "
+                "Es wurden keine MIDI-Daten gesendet."
+            )
+            self.midi_tab.set_status(message)
+            self.status.set("MIDI-Ein-/Ausgangstest erfolgreich")
+        except Exception as exc:
+            self._show_error("MIDI-Ein-/Ausgangstest fehlgeschlagen", exc)
+
+    def send_selected_to_buffer(self) -> None:
+        index = self._single_occupied_index()
+        if index is None:
+            return
+        patch = self.project.slots[index].patch  # type: ignore[union-attr]
+        try:
+            port_name, device_id, delay_ms = self.midi_tab.selected_preview_settings()
+            if not port_name:
+                raise MidiTransferError("Bitte zuerst im MIDI-Tab einen Ausgang auswählen")
+
+            def show_progress(current: int, total: int) -> None:
+                self.midi_tab.set_status(f"Sende DT1-Nachricht {current} von {total} an '{port_name}' …")
+                self.root.update_idletasks()
+
+            report = send_temporary_patch(
+                patch,
+                port_name=port_name,
+                device_id=device_id,
+                delay_ms=delay_ms,
+                progress=show_progress,
+            )
+            message = (
+                f"'{report.patch_name}' wurde mit {report.message_count} DT1-Nachrichten "
+                f"({report.data_byte_count} Patchbytes) in den Temporary Buffer gesendet. "
+                "Experimentelle Vorschau: Partials, Layer oder Splits können am realen D-50 "
+                "abweichend initialisiert werden. Interne Patchplätze und Reverbs wurden nicht adressiert."
+            )
+            self.midi_tab.set_status(message)
+            self.status.set(f"Patch im D-50-Buffer: {patch.name}")
+        except Exception as exc:
+            self._show_error("Patch konnte nicht in den Temporary Buffer gesendet werden", exc)
+
+    @property
+    def bank_transfer_active(self) -> bool:
+        return self._bank_transfer_thread is not None and self._bank_transfer_thread.is_alive()
+
+    def send_bank_to_d50(self) -> None:
+        if self.bank_transfer_active:
+            self.status.set("Es läuft bereits eine MIDI-Bankübertragung")
+            return
+        if not self.project.has_complete_reverbs:
+            messagebox.showerror(
+                "Bank-Senden blockiert",
+                "Die Reverb-Basis 17–32 fehlt. Eine vollständige D-50-Bank kann so nicht gesendet werden.",
+                parent=self.root,
+            )
+            return
+        try:
+            output_name, input_name, device_id = self.midi_tab.selected_bank_settings()
+            if not output_name or not input_name:
+                raise MidiTransferError("Bitte MIDI-Ausgang und MIDI-Eingang für den D-50 auswählen")
+            filled_count = self.project.empty_count
+            fill_patch = create_init_patch(source_device_id=device_id) if filled_count else None
+            bank = self.project.to_bank(fill_patch=fill_patch)
+        except Exception as exc:
+            self._show_error("Bank kann nicht für MIDI vorbereitet werden", exc)
+            return
+
+        details = (
+            "ACHTUNG: Der folgende Handshake überschreibt die komplette interne D-50-Bank:\n\n"
+            "• 64 Patchplätze\n"
+            "• Reverbprogramme 17–32\n\n"
+            f"Arbeitsbank: {self.project.label}\n"
+            f"Device ID: {device_id:02X}h"
+        )
+        if filled_count:
+            details += f"\n{filled_count} leere App-Slots werden als INIT SAW gesendet."
+        details += (
+            "\n\nVorher Backup erstellen, Memory Protect ausschalten und den D-50 "
+            "in DATA TRANSFER → B.Load bereitstellen. Jetzt senden?"
+        )
+        if not messagebox.askyesno("Komplette Bank an D-50 senden", details, parent=self.root):
+            return
+
+        self._begin_bank_transfer(
+            status="Handshake mit D-50 B.Load wird gestartet…",
+            operation=lambda progress, cancelled: send_full_bank_handshake(
+                bank,
+                output_port_name=output_name,
+                input_port_name=input_name,
+                device_id=device_id,
+                progress=progress,
+                cancelled=cancelled,
+            ),
+            success=self._finish_bank_send,
+        )
+
+    def receive_bank_from_d50(self) -> None:
+        if self.bank_transfer_active:
+            self.status.set("Es läuft bereits eine MIDI-Bankübertragung")
+            return
+        if not self._ask_save_if_dirty():
+            return
+        try:
+            output_name, input_name, device_id = self.midi_tab.selected_bank_settings()
+            if not output_name or not input_name:
+                raise MidiTransferError("Bitte MIDI-Ausgang und MIDI-Eingang für den D-50 auswählen")
+        except Exception as exc:
+            self._show_error("Bankempfang kann nicht gestartet werden", exc)
+            return
+        if not messagebox.askokcancel(
+            "Komplette Bank vom D-50 empfangen",
+            "Die Anwendung öffnet jetzt beide MIDI-Ports und wartet auf den Handshake.\n\n"
+            "Danach am D-50 DATA TRANSFER → B.Dump starten. Die empfangene Bank ersetzt erst nach "
+            "vollständiger Prüfung die aktuelle Arbeitsbank. Fortfahren?",
+            parent=self.root,
+        ):
+            return
+
+        self._begin_bank_transfer(
+            status="MIDI-Ports geöffnet; jetzt am D-50 B.Dump starten…",
+            operation=lambda progress, cancelled: receive_full_bank_handshake(
+                output_port_name=output_name,
+                input_port_name=input_name,
+                device_id=device_id,
+                label="D-50 MIDI Bank",
+                progress=progress,
+                cancelled=cancelled,
+            ),
+            success=self._finish_bank_receive,
+        )
+
+    def _begin_bank_transfer(self, *, status: str, operation, success) -> None:
+        self._bank_cancel_event.clear()
+        self.midi_tab.set_transfer_active(True)
+        self.midi_tab.reset_progress("Handshake wird vorbereitet")
+        self.midi_tab.set_status(status)
+        self.status.set(status)
+
+        def progress(phase: str, current: int, total: int) -> None:
+            self.root.after(0, lambda: self.midi_tab.set_progress(phase, current, total))
+
+        def worker() -> None:
+            try:
+                result = operation(progress, self._bank_cancel_event.is_set)
+            except BaseException as exc:
+                self.root.after(0, lambda error=exc: self._finish_bank_transfer_error(error))
+            else:
+                self.root.after(0, lambda value=result: success(value))
+
+        self._bank_transfer_thread = threading.Thread(target=worker, name="D50BankTransfer", daemon=True)
+        self._bank_transfer_thread.start()
+
+    def _finish_bank_transfer_ui(self) -> None:
+        self._bank_transfer_thread = None
+        self.midi_tab.set_transfer_active(False)
+
+    def _finish_bank_send(self, report: BankSendReport) -> None:
+        self._finish_bank_transfer_ui()
+        message = (
+            f"Bank '{report.bank_label}' vollständig gesendet: {report.data_message_count} DAT-Blöcke, "
+            f"{report.data_byte_count} Byte, jeder Block vom D-50 bestätigt."
+        )
+        self.midi_tab.set_status(message)
+        self.midi_tab.reset_progress("Bank-Senden abgeschlossen")
+        self.status.set("D-50-Bank per Handshake gesendet")
+        messagebox.showinfo("Bankübertragung abgeschlossen", message, parent=self.root)
+
+    def _finish_bank_receive(self, report: BankReceiveReport) -> None:
+        self._finish_bank_transfer_ui()
+        self.editor.replace_project(BankProject.from_bank(report.bank))
+        self.editor.dirty = True
+        self.selection = {0}
+        self.bank_tab.matrix.set_selection(self.selection, notify=False)
+        self.refresh(
+            f"D-50-Bank empfangen: {report.data_message_count} DAT-Blöcke / {report.data_byte_count} Byte"
+        )
+        self.midi_tab.set_status(
+            "Vollständige D-50-Bank empfangen und geprüft. Bitte als Projekt oder SysEx sichern."
+        )
+        self.midi_tab.reset_progress("Bank-Empfang abgeschlossen")
+        messagebox.showinfo(
+            "Bank empfangen",
+            "64 Patches und Reverbs 17–32 wurden vollständig empfangen und in die Arbeitsbank übernommen.",
+            parent=self.root,
+        )
+
+    def _finish_bank_transfer_error(self, exc: BaseException) -> None:
+        self._finish_bank_transfer_ui()
+        if isinstance(exc, BankTransferCancelled):
+            self.midi_tab.set_status("Bankübertragung wurde abgebrochen.")
+            self.midi_tab.reset_progress("Abgebrochen")
+            self.status.set("MIDI-Bankübertragung abgebrochen")
+            return
+        self.midi_tab.reset_progress("Übertragung fehlgeschlagen")
+        self._show_error("MIDI-Bankübertragung fehlgeschlagen", exc)
+
+    def cancel_bank_transfer(self) -> None:
+        if not self.bank_transfer_active:
+            return
+        self._bank_cancel_event.set()
+        self.midi_tab.set_status("Abbruch angefordert; Handshake wird sicher beendet…")
+
     def show_context_menu(self, index: int, x: int, y: int) -> None:
         occupied = self.project.slots[index] is not None
         menu = tk.Menu(self.root, tearoff=False)
         if occupied:
-            menu.add_command(label="Vorhören: Dump into Buffer (Phase 3)", state="disabled")
+            menu.add_command(
+                label="Vorhören (experimentell): Dump into Buffer",
+                command=self.send_selected_to_buffer,
+            )
             menu.add_command(label=tr("save_single"), command=self.save_selected_single)
             menu.add_command(label=tr("rename"), command=self.rename_selected)
             menu.add_separator()
@@ -714,9 +1000,11 @@ class MainWindow:
             menu.add_command(label=tr("duplicate"), command=self.duplicate_to)
             menu.add_command(label=tr("move"), command=self.move_dialog)
             menu.add_separator()
-            menu.add_command(label=tr("clear"), command=self.clear_selected)
+            menu.add_command(label="Platz leeren (INIT SAW)", command=self.clear_selected)
             menu.add_command(label=tr("delete_shift"), command=self.delete_and_shift)
         else:
+            menu.add_command(label="Neuer Patch (INIT SAW)", command=self.initialize_selected)
+            menu.add_separator()
             menu.add_command(label=tr("import_patches"), command=self.import_singles)
             menu.add_command(label=tr("paste"), command=self.paste)
         menu.tk_popup(x, y)
@@ -776,13 +1064,20 @@ class MainWindow:
         messagebox.showinfo(
             "Über D-50 Patch Librarian",
             f"D-50 Patch Librarian v{__version__}\n\n"
-            "Phase 2: Bankeditor und Dateiworkflows\n"
+            "Bankeditor, Dateiworkflows und vollständiger MIDI-Bank-Handshake\n"
             "Kein Klangparameter-Editor\n\n"
-            "MIDI-Senden/Empfangen folgt in Phase 3/4.",
+            "Experimentelle Patch-Vorschau sowie vollständiges Bank-Senden und -Empfangen.",
             parent=self.root,
         )
 
     def close(self) -> None:
+        if self.bank_transfer_active:
+            messagebox.showwarning(
+                "Bankübertragung läuft",
+                "Bitte zuerst die MIDI-Bankübertragung abbrechen und auf das Ende des Handshakes warten.",
+                parent=self.root,
+            )
+            return
         if self._ask_save_if_dirty():
             self.root.destroy()
 
