@@ -1,0 +1,21 @@
+D-50 Patch Librarian 0.2.1 – Phase 2
+====================================
+
+Start:
+  D50PatchLibrarian.exe doppelklicken.
+
+Wichtig:
+  Die EXE und der Ordner _internal müssen zusammenbleiben.
+
+Schnelltest:
+  1. "Bank öffnen" wählen und eine vollständige D-50-.syx-Datei laden.
+  2. Einen Slot anklicken, mit F2 umbenennen und mit Strg+Z rückgängig machen.
+  3. Per Rechtsklick "Als Einzel-SysEx speichern" testen.
+  4. Das Arbeitsprojekt als .d50proj speichern.
+
+Teilgefüllte Banken:
+  Für den Bankexport werden Reverbs 17–32 aus einer vollständigen Quellbank benötigt.
+  Leere Slots werden nur nach Bestätigung mit einem vorhandenen Patch gefüllt.
+
+Noch nicht enthalten:
+  MIDI-Senden/Empfangen und Dump into Buffer (Phase 3/4).

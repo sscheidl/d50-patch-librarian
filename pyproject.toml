@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "d50-patch-librarian"
+version = "0.2.1"
+description = "Strict Roland D-50 SysEx codec and patch librarian foundation"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "TBD" }
+authors = [{ name = "D-50 Patch Librarian contributors" }]
+dependencies = []
+
+[project.optional-dependencies]
+test = ["pytest>=8.0"]
+build = ["pyinstaller>=6.0"]
+midi = ["mido>=1.2.10", "python-rtmidi>=1.5.8"]
+
+[project.scripts]
+d50-librarian = "app.cli:main"
+
+[tool.setuptools]
+packages = ["app", "domain", "d50", "services", "midi", "gui"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"

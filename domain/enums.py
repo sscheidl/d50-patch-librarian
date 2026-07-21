@@ -1,0 +1,26 @@
+"""Stable public classifications used by the codec and future GUI."""
+
+from __future__ import annotations
+
+from enum import StrEnum
+
+
+class DumpType(StrEnum):
+    D50_FULL_BANK = "D50_FULL_BANK"
+    D50_PARTIAL_BANK = "D50_PARTIAL_BANK"
+    D50_SINGLE_PATCH_TEMP = "D50_SINGLE_PATCH_TEMP"
+    D50_SINGLE_PATCH_MEMORY = "D50_SINGLE_PATCH_MEMORY"
+    D50_VALID_OTHER = "D50_VALID_OTHER"
+    D50_CORRUPT = "D50_CORRUPT"
+    ROLAND_OTHER_MODEL = "ROLAND_OTHER_MODEL"
+    FOREIGN_SYSEX = "FOREIGN_SYSEX"
+    NOT_SYSEX = "NOT_SYSEX"
+
+
+class ReverbStatus(StrEnum):
+    FIXED_1_16 = "FIXED_1_16"
+    SOURCE_AVAILABLE = "SOURCE_AVAILABLE"
+    SOURCE_MISSING = "SOURCE_MISSING"
+    RESOLVED = "RESOLVED"
+    CONFLICT = "CONFLICT"
+
