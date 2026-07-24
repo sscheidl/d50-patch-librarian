@@ -24,6 +24,7 @@ class PatchDetails(ttk.LabelFrame):
         super().__init__(master, text="Patchdetails", padding=10)
         self.on_apply = on_apply
         self.current_index: int | None = None
+        self._midi_busy = False
         self.variables = {
             "slot": tk.StringVar(value="—"),
             "name": tk.StringVar(value="—"),
@@ -140,4 +141,10 @@ class PatchDetails(ttk.LabelFrame):
         self.apply_button.configure(state=state)
         self.rename_button.configure(state=state)
         self.save_button.configure(state=state)
-        self.preview_button.configure(state=state)
+        self.preview_button.configure(state="normal" if enabled and not self._midi_busy else "disabled")
+
+    def set_midi_busy(self, busy: bool) -> None:
+        self._midi_busy = busy
+        self.preview_button.configure(
+            state="normal" if self.current_index is not None and not busy else "disabled"
+        )

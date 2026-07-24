@@ -21,6 +21,7 @@ from .temporary_sender import (
     test_midi_input_port,
     test_midi_output_port,
 )
+from .operation_manager import MidiOperation, MidiOperationManager, OperationToken
 
 __all__ = [
     "BankReceiveReport",
@@ -29,6 +30,9 @@ __all__ = [
     "DEFAULT_MESSAGE_DELAY_MS",
     "MidoBackend",
     "MidiTransferError",
+    "MidiOperation",
+    "MidiOperationManager",
+    "OperationToken",
     "TemporaryPatchTransferPlan",
     "TemporaryPatchTransferReport",
     "build_temporary_patch_plan",

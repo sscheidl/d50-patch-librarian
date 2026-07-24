@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.4.2 – 2026-07-22
+
+- Alle MIDI-Aktionen verwenden einen gemeinsamen threadsicheren Operationsmanager mit eindeutiger Job-ID; Preview, Banktransfer, Porttest und Portrefresh können sich nicht mehr überschneiden.
+- Patch-Vorschau läuft in einem Worker und übergibt Fortschritt und Abschluss über eine Queue ausschließlich an den Tkinter-Hauptthread.
+- Preview- und Bankaktionen werden während eines MIDI-Jobs konsistent deaktiviert; Mehrfachaufrufe und veraltete Abschlussereignisse werden abgelehnt.
+- Die Preview-Statusmeldung unterscheidet nun korrekt zwischen gesendeten Daten und einem nicht bestätigten Empfang durch den D-50.
+- Portabschluss und Fehlerpriorität des Preview-Senders wurden gehärtet; Diagnoseeinträge enthalten Job, Port, Device-ID, Timing, Frameadressen und Datenlängen.
+- Der Bank-Handshake leert veraltete Eingangsnachrichten nur vor Transferbeginn, filtert zustandsabhängig erlaubte Befehle und ignoriert eigene Echo-Frames sowie fremde SysEx-Daten.
+- Der Bankempfang besitzt ein Gesamtzeitlimit, toleriert begrenzte identische DAT-Wiederholungen und protokolliert Nachrichten, eindeutige Blöcke, Dubletten und Nutzbytes getrennt.
+- Kombinierter Patch-/Reverbimport ist atomar und genau einmal rückgängig zu machen; ein Reverbimport verändert die Projekt-Device-ID nicht mehr.
+- Undo/Redo in Eingabefeldern, Drag-Schwelle und Zielmarkierung, Matrixspalten, Kontextauswahl, Reverbstatus und sichere Einzelpatch-Dateinamen wurden korrigiert.
+- Read-only-CLI `diagnose-preview-roundtrip` und 64-Patch-Regressionstests bestätigen die byteidentische Erhaltung aller bekannten, unbekannten und reservierten Patchbytes.
+- Temporary-Buffer-Vorhören bleibt bis zu weiterem Hardwaretest ausdrücklich experimentell.
+
 ## 0.4.1 – 2026-07-21
 
 - Temporary-Buffer-Vorhören ist nach Hardwaretests ausdrücklich als experimentell/buggy markiert.

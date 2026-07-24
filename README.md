@@ -1,6 +1,6 @@
 # D-50 Patch Librarian
 
-Windows-Patch-Librarian für den Roland D-50. Version `0.4.1` implementiert einen strikt
+Windows-Patch-Librarian für den Roland D-50. Version `0.4.2` implementiert einen strikt
 validierenden SysEx-Codec, den grafischen 8×8-Bankeditor und die vollständige bidirektionale
 MIDI-Bankübertragung.
 
@@ -49,6 +49,10 @@ Eine `.syx`- oder `.d50proj`-Datei kann auch auf `D50PatchLibrarian.exe` gezogen
 - D-50-Zeichensatzprüfung mit korrekter kompakter 6-Bit-Codierung und sicheres Umbenennen des 18-Zeichen-Patchnamens
 - atomischer Datei-Export; bestehende Ziele werden ohne `--force` nicht ersetzt
 - CLI zum Prüfen, Kanonisieren und Exportieren aller Bankpatches
+- zentral serialisierte MIDI-Operationen und nichtblockierende Temporary-Buffer-Vorschau
+- gehärteter Bank-Handshake mit Eingangs-Flush vor dem Start, Befehls-/Echo-Filter,
+  Gesamtzeitlimit und begrenzter DAT-Dublettenbehandlung
+- atomarer kombinierter Patch-/Reverbimport ohne stille Änderung der Projekt-Device-ID
 
 ## Unterstützte Formate
 
@@ -116,6 +120,15 @@ Alle 64 Patches einer Bank in einen Unterordner exportieren:
 python main.py export-singles bank.syx export
 ```
 
+Alle 64 Patches einer Bank read-only durch die Preview-Serialisierung prüfen:
+
+```powershell
+python main.py diagnose-preview-roundtrip bank.syx
+```
+
+Die Diagnose verändert keine Datei und sendet keine MIDI-Daten. Sie vergleicht für jeden Slot alle
+448 Rohbytes einschließlich unbekannter und reservierter Bereiche.
+
 Vorhandene Zieldateien werden nicht still überschrieben. Nur die explizite Option `--force`
 erlaubt ein Ersetzen.
 
@@ -137,6 +150,8 @@ erstellt. Abgedeckt sind unter anderem:
 - falsche Prüfsumme, abgeschnittener Frame, Fremdhersteller und anderes Roland-Modell
 - Fremdbytes, falsche Device ID, gemischte Device IDs und widersprüchliche Überlappung
 - ungültige Namen und unvollständige Banken
+- konkurrierende MIDI-Aktionen, alte/gespiegelte Handshake-Frames, Gesamtzeitlimit und DAT-Dubletten
+- atomare Import-Rollbacks, geschützte Eingabefeld-Shortcuts und Drag-Bewegungsschwelle
 
 Die Fixtures sind synthetische Protokollfixtures und keine Werkspresets.
 
@@ -208,7 +223,10 @@ gesendet. `Dump into Buffer` schreibt ausschließlich sieben Temporary-Area-DT1-
 standardmäßig 50 ms Abstand und einer zusätzlichen Abschlusswartezeit. Reverb 17–32 wird beim
 Vorhören nicht automatisch überschrieben. Der D-50 initialisiert dabei nach Hardwarebeobachtung
 nicht immer alle Partials, Layer und Key-Mode/Split-Zustände zuverlässig; diese Funktion ist daher
-ausdrücklich experimentell.
+ausdrücklich experimentell. Preview, Banktransfer, Porttest und Portaktualisierung sind zentral
+gegeneinander verriegelt. Die Vorschau läuft außerhalb des GUI-Threads; Tkinter-Änderungen werden
+über eine vom Hauptthread abgefragte Queue ausgeführt. „Gesendet“ bedeutet ohne RQ1-Readback nicht,
+dass der D-50 den vollständigen Temporary Buffer bestätigt hat.
 
 Komplette Banken verwenden zwei MIDI-Kabel und Rolands bidirektionalen Handshake. Beim Senden
 bestätigt der D-50 jeden der 136 DAT-Blöcke, bevor die Anwendung fortfährt. Beim Empfang wird jeder

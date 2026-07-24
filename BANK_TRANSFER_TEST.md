@@ -17,6 +17,8 @@ erste Test am realen Gerät darf nur mit gesicherter Bank erfolgen.
 2. `Komplette Bank vom D-50 empfangen` starten.
 3. Erst wenn das Tool wartet, am D-50 DATA TRANSFER → B.Dump auslösen.
 4. Erwartet werden 136 bestätigte DAT-Blöcke und 34.688 Nutzdatenbytes.
+   Begrenzte identische DAT-Wiederholungen werden gezählt; widersprüchliche Blöcke oder ein
+   Dubletten-Loop führen kontrolliert zum Abbruch.
 5. Die empfangene Arbeitsbank sofort als `.d50proj` und `.syx` sichern.
 6. Die exportierte SysEx-Datei erneut öffnen und stichprobenartig Patchnamen/Reverbs vergleichen.
 
@@ -35,6 +37,7 @@ erste Test am realen Gerät darf nur mit gesicherter Bank erfolgen.
 - Timeout auf ACK, WSD, DAT oder EOD
 - andere Device ID oder andere angekündigte Adresse/Größe
 - weniger als 34.688 eindeutige Nutzdatenbytes
+- überschrittenes Gesamtzeitlimit oder ungewöhnlich viele identische DAT-Dubletten
 - Memory Protect oder B.Load ist nicht eindeutig vorbereitet
 
 Bei einem Abbruch darf nicht sofort erneut gesendet werden. Zuerst internen Bankzustand und Backup

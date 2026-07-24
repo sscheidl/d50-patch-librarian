@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "d50-patch-librarian"
-version = "0.4.1"
+version = "0.4.2"
 description = "Strict Roland D-50 SysEx codec and patch librarian foundation"
 readme = "README.md"
 requires-python = ">=3.11"

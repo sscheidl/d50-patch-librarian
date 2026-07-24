@@ -1,4 +1,4 @@
-D-50 Patch Librarian 0.4.1 – Phasen 2 bis 4
+D-50 Patch Librarian 0.4.2 – Phasen 2 bis 4
 ====================================
 
 Start:
@@ -20,6 +20,8 @@ Teilgefüllte Banken:
 
 MIDI / Temporary Buffer:
   Ausgang und Device ID immer bewusst auswählen; Vorschau erfolgt aus Matrix oder Patchdetails.
+  Während der Vorschau bleibt das Fenster bedienbar; andere MIDI-Aktionen sind bis zum Abschluss gesperrt.
+  Die Meldung "gesendet" ist keine Empfangsbestätigung des D-50.
   ACHTUNG: Vorschau ist experimentell/buggy. Partials, Layer und Keyboard-Splits können gegenüber
   einem vollständigen Bankimport falsch initialisiert werden.
 
@@ -27,4 +29,6 @@ MIDI / vollständige Bank:
   Für den Handshake müssen MIDI IN und OUT verbunden und beide M8U-Ports ausgewählt sein.
   Senden überschreibt 64 interne Patches sowie Reverbs 17–32: vorher Backup und Memory Protect OFF.
   Empfang zuerst im Tool starten, danach am D-50 B.Dump auslösen.
+  Alte Eingangsnachrichten werden nur vor dem Handshake verworfen; Echo-/Fremdframes und begrenzte
+  identische DAT-Wiederholungen werden während des Transfers kontrolliert behandelt.
   Der vollständige Bank-Handshake ist simuliert geprüft; der reale Hardwaretest steht noch aus.

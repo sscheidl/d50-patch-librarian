@@ -26,11 +26,19 @@ Vollbanktest steht in `BANK_TRANSFER_TEST.md`.
 ## Erster Sendetest
 
 1. Einen unkritischen Patch mit Reverb 1–16 auswählen.
-2. `Patch in Temporary Buffer senden` genau einmal betätigen.
+2. `Im D-50 vorhören (experimentell)` genau einmal betätigen.
 3. Prüfen, ob Patchname und Klang am D-50 wechseln.
 4. Keine automatische Note erwarten; auf dem D-50 manuell spielen.
 5. Einen internen Speicherplatz wechseln und zurückkehren. Es darf kein Patch Memory überschrieben sein.
 6. Die gespeicherte 64er-Bank erneut auslesen und mit dem Backup vergleichen.
+
+## Software-Härtung ab 0.4.2
+
+- Während der Vorschau dürfen Bank-Senden, Bank-Empfang, Porttest und Portrefresh nicht starten.
+- Ein zweiter Preview-Aufruf muss mit einem Busy-Hinweis abgelehnt werden.
+- Nach Erfolg oder Fehler muss die Anzeige wieder `MIDI bereit` melden.
+- `Gesendet` ist ohne RQ1-Readback keine Empfangsbestätigung des D-50.
+- Zur Dateidiagnose kann vorab `python main.py diagnose-preview-roundtrip bank.syx` ausgeführt werden.
 
 ## Reverb-Test
 

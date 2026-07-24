@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+import logging
 import time
 from typing import Protocol
 
@@ -15,6 +16,9 @@ from domain.patch import D50Patch
 
 MIN_MESSAGE_DELAY_MS = 20
 DEFAULT_MESSAGE_DELAY_MS = 50
+FINAL_PORT_SETTLE_SECONDS = 0.15
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class MidiTransferError(RuntimeError):
@@ -187,6 +191,8 @@ def send_temporary_patch(
     backend: MidiBackend | None = None,
     sleeper: Callable[[float], None] = time.sleep,
     progress: Callable[[int, int], None] | None = None,
+    job_id: int | None = None,
+    diagnostic: Callable[[str], None] | None = None,
 ) -> TemporaryPatchTransferReport:
     if not port_name:
         raise MidiTransferError("Kein MIDI-Ausgang ausgewählt")
@@ -196,23 +202,83 @@ def send_temporary_patch(
     selected_backend = backend or MidoBackend()
     port = selected_backend.open_output(port_name)
     started = time.perf_counter()
+    tag = f"#{job_id}" if job_id is not None else "#-"
+    _LOGGER.info(
+        "[TX PREVIEW %s] Start patch=%r port=%r device=%02X delay=%dms frames=%d",
+        tag,
+        patch.name,
+        port_name,
+        device_id,
+        delay_ms,
+        plan.message_count,
+    )
+    if diagnostic is not None:
+        diagnostic(
+            f"[TX PREVIEW {tag}] Start patch={patch.name!r} port={port_name!r} "
+            f"device={device_id:02X} delay={delay_ms}ms frames={plan.message_count}"
+        )
+    failure: BaseException | None = None
     try:
         for index, frame in enumerate(plan.frames, start=1):
             port.send_sysex(frame)
+            _LOGGER.info(
+                "[TX PREVIEW %s] Frame %d/%d address=%02X-%02X-%02X bytes=%d",
+                tag,
+                index,
+                plan.message_count,
+                *plan.addresses[index - 1],
+                len(parse_dt1_frame(frame, index=index).data),
+            )
+            if diagnostic is not None:
+                address = plan.addresses[index - 1]
+                diagnostic(
+                    f"[TX PREVIEW {tag}] Frame {index}/{plan.message_count} "
+                    f"address={address[0]:02X}-{address[1]:02X}-{address[2]:02X} data=64 Byte"
+                )
             if progress is not None:
                 progress(index, plan.message_count)
             if index < plan.message_count:
                 sleeper(delay_ms / 1000)
     except Exception as exc:
-        if isinstance(exc, MidiTransferError):
-            raise
-        raise MidiTransferError(f"MIDI-Sendung wurde abgebrochen: {exc}") from exc
-    finally:
-        # WinMM can still have the final SysEx message queued when send()
-        # returns. Keep the port alive briefly so the patch block is not lost.
-        sleeper(0.15)
+        failure = exc if isinstance(exc, MidiTransferError) else MidiTransferError(
+            f"MIDI-Sendung wurde abgebrochen: {exc}"
+        )
+
+    # WinMM can still have the final SysEx message queued when send() returns.
+    # Keep the port alive briefly so the patch block is not lost.
+    try:
+        sleeper(FINAL_PORT_SETTLE_SECONDS)
+    except Exception as exc:
+        if failure is None:
+            failure = MidiTransferError(f"Abschlusswartezeit der MIDI-Sendung ist fehlgeschlagen: {exc}")
+        else:
+            _LOGGER.warning("[TX PREVIEW %s] Settle error after primary failure: %s", tag, exc)
+    try:
         port.close()
+    except Exception as exc:
+        if failure is None:
+            failure = MidiTransferError(f"MIDI-Ausgang konnte nicht geschlossen werden: {exc}")
+        else:
+            _LOGGER.warning("[TX PREVIEW %s] Close error after primary failure: %s", tag, exc)
+
+    if failure is not None:
+        _LOGGER.error("[TX PREVIEW %s] Failed: %s", tag, failure)
+        if diagnostic is not None:
+            diagnostic(f"[TX PREVIEW {tag}] Fehler: {failure}")
+        raise failure
     elapsed_ms = round((time.perf_counter() - started) * 1000)
+    _LOGGER.info(
+        "[TX PREVIEW %s] Complete frames=%d bytes=%d elapsed=%dms",
+        tag,
+        plan.message_count,
+        plan.data_byte_count,
+        elapsed_ms,
+    )
+    if diagnostic is not None:
+        diagnostic(
+            f"[TX PREVIEW {tag}] Complete frames={plan.message_count} "
+            f"bytes={plan.data_byte_count} elapsed={elapsed_ms}ms"
+        )
     return TemporaryPatchTransferReport(
         port_name=port_name,
         patch_name=patch.name,

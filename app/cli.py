@@ -15,6 +15,7 @@ from domain.enums import DumpType
 from domain.errors import D50Error
 from services.file_service import atomic_write_bytes
 from services.patch_export_service import export_bank_patches
+from services.preview_diagnostics import diagnose_bank_preview
 
 
 def _hex_device_id(value: int | None) -> str | None:
@@ -131,6 +132,29 @@ def _cmd_export_singles(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_diagnose_preview_roundtrip(args: argparse.Namespace) -> int:
+    source = Path(args.bank)
+    bank = parse_bank(source.read_bytes(), source_path=source)
+    report = diagnose_bank_preview(bank)
+    print(f"Bank: {report.bank_label}")
+    for patch in report.patches:
+        print(f"{patch.slot} {patch.patch_name}: {'OK' if patch.ok else 'DIFFERENCE'}")
+        for issue in patch.issues:
+            print(f"  {issue}")
+        for difference in patch.differences:
+            print(
+                f"  {difference.block} Offset {difference.offset:03d}: "
+                f"{difference.expected:02X} -> {difference.actual:02X}"
+            )
+    print(f"Patches geprüft: {len(report.patches)}")
+    print(f"Ohne Differenz: {report.ok_count}")
+    print(f"Mit Differenz: {report.difference_count}")
+    print(f"Ungültig: {report.invalid_count}")
+    if report.ok:
+        print(f"{report.ok_count} von {len(report.patches)} Patches ohne Roundtrip-Differenz.")
+    return 0 if report.ok else 3
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="d50-librarian",
@@ -155,6 +179,13 @@ def build_parser() -> argparse.ArgumentParser:
     export_parser.add_argument("destination")
     export_parser.add_argument("--force", action="store_true", help="Vorhandene Zieldateien ersetzen")
     export_parser.set_defaults(handler=_cmd_export_singles)
+
+    preview_parser = commands.add_parser(
+        "diagnose-preview-roundtrip",
+        help="Alle 64 Bankpatches ohne Dateiänderung durch die Preview-Serialisierung prüfen",
+    )
+    preview_parser.add_argument("bank")
+    preview_parser.set_defaults(handler=_cmd_diagnose_preview_roundtrip)
     return parser
 
 

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import ctypes
+import logging
 import os
 from pathlib import Path
+import queue
 import sys
 import threading
 import tkinter as tk
@@ -24,6 +26,7 @@ from midi.bank_transfer import (
     receive_full_bank_handshake,
     send_full_bank_handshake,
 )
+from midi.operation_manager import MidiOperation, MidiOperationManager, OperationToken
 from midi.temporary_sender import (
     MidiTransferError,
     list_midi_input_ports,
@@ -50,12 +53,20 @@ from .midi_transfer_tab import MidiTransferTab
 from .widgets.status_bar import StatusBar
 
 
+_LOGGER = logging.getLogger(__name__)
+
+
 class MainWindow:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
         self.editor = BankEditorService()
         self.selection: set[int] = {0}
-        self._bank_transfer_thread: threading.Thread | None = None
+        self.midi_operations = MidiOperationManager()
+        self._midi_thread: threading.Thread | None = None
+        self._midi_events: queue.Queue[tuple[str, OperationToken, object]] = queue.Queue()
+        self._midi_success = None
+        self._midi_error = None
+        self._midi_progress = None
         self._bank_cancel_event = threading.Event()
         self._configure_root()
         self._build_menu()
@@ -64,6 +75,7 @@ class MainWindow:
         self._bind_shortcuts()
         self.root.protocol("WM_DELETE_WINDOW", self.close)
         self.refresh("Neue leere Arbeitsbank")
+        self._midi_poll_id = self.root.after(25, self._poll_midi_events)
 
     @property
     def project(self) -> BankProject:
@@ -191,8 +203,8 @@ class MainWindow:
         self.root.bind("<Control-n>", lambda _event: self.new_project())
         self.root.bind("<Control-o>", lambda _event: self.open_bank())
         self.root.bind("<Control-s>", lambda _event: self.save_project())
-        self.root.bind("<Control-z>", lambda _event: self.undo())
-        self.root.bind("<Control-y>", lambda _event: self.redo())
+        self.root.bind("<Control-z>", lambda event: self._shortcut(event, self.undo))
+        self.root.bind("<Control-y>", lambda event: self._shortcut(event, self.redo))
         self.root.bind("<Control-c>", lambda event: self._shortcut(event, self.copy))
         self.root.bind("<Control-x>", lambda event: self._shortcut(event, self.cut))
         self.root.bind("<Control-v>", lambda event: self._shortcut(event, self.paste))
@@ -206,7 +218,7 @@ class MainWindow:
 
     def _shortcut(self, event: tk.Event, command) -> str | None:
         widget_class = event.widget.winfo_class() if event.widget is not None else ""
-        if widget_class in {"Entry", "TEntry", "Text", "TCombobox", "Spinbox"}:
+        if widget_class in {"Entry", "TEntry", "Text", "TCombobox", "Spinbox", "TSpinbox"}:
             return None
         command()
         return "break"
@@ -225,12 +237,14 @@ class MainWindow:
             empty=self.project.empty_count,
             reverbs_complete=self.project.has_complete_reverbs,
         )
+        reverb_parts: list[str] = []
         if self.project.reverb_conflict_count:
-            reverb = f"{self.project.reverb_conflict_count} Reverbkonflikt(e)"
-        elif self.project.reverb_missing_count:
-            reverb = f"{self.project.reverb_missing_count} Reverbquelle(n) unbekannt"
-        else:
-            reverb = "Reverbs vollständig" if self.project.has_complete_reverbs else "Reverbs fehlen"
+            reverb_parts.append(f"{self.project.reverb_conflict_count} Reverbkonflikt(e)")
+        if self.project.reverb_missing_count:
+            reverb_parts.append(f"{self.project.reverb_missing_count} Quelle(n) unbekannt")
+        if not reverb_parts:
+            reverb_parts.append("Reverbs vollständig" if self.project.has_complete_reverbs else "Reverbs fehlen")
+        reverb = " · ".join(reverb_parts)
         self.status.set(message, f"{self.project.occupied_count}/64 Patches · {reverb}")
 
     def _refresh_details(self) -> None:
@@ -458,14 +472,18 @@ class MainWindow:
                 parent=self.root,
             ):
                 return
-            written = self.editor.import_patches(list(bank.patches[:count]), start_index=min(self.selection))
-            if not self.project.has_complete_reverbs and messagebox.askyesno(
-                "Reverb-Basis übernehmen",
-                "Die Arbeitsbank besitzt keine vollständige Reverb-Basis. Reverbs 17–32 aus der Quellbank übernehmen?",
-                parent=self.root,
-            ):
-                self.editor.set_reverbs(bank.reverbs)
-                self.project.device_id = bank.device_id
+            take_reverbs = False
+            if not self.project.has_complete_reverbs:
+                take_reverbs = messagebox.askyesno(
+                    "Reverb-Basis übernehmen",
+                    "Die Arbeitsbank besitzt keine vollständige Reverb-Basis. Reverbs 17–32 aus der Quellbank übernehmen?",
+                    parent=self.root,
+                )
+            written = self.editor.import_bank_content(
+                list(bank.patches[:count]),
+                start_index=min(self.selection),
+                reverbs=bank.reverbs if take_reverbs else None,
+            )
             self.selection = set(written)
             self.bank_tab.matrix.set_selection(self.selection, notify=False)
             self.refresh(f"{len(written)} Patches aus {bank.label} importiert")
@@ -489,7 +507,6 @@ class MainWindow:
             ):
                 return
             self.editor.set_reverbs(bank.reverbs)
-            self.project.device_id = bank.device_id
             self.refresh(f"Reverbs 17–32 aus {bank.label} übernommen")
         except Exception as exc:
             self._show_error("Reverb-Basis konnte nicht übernommen werden", exc, path)
@@ -591,7 +608,10 @@ class MainWindow:
             parent=self.root,
             title="Patch als Einzel-SysEx speichern",
             defaultextension=".syx",
-            initialfile=f"{row + 1:02d}-{column + 1}_{patch.name.replace(' ', '_')}.syx",
+            initialfile=(
+                f"{row + 1:02d}-{column + 1}_"
+                f"{safe_filename_component(patch.name, fallback='D50_Patch')}.syx"
+            ),
             filetypes=(("D-50 SysEx", "*.syx"),),
         )
         if not path:
@@ -758,7 +778,125 @@ class MainWindow:
         self.bank_tab.matrix.set_selection(self.selection, notify=False)
         self.refresh("Alle Slots ausgewählt")
 
+    def _reject_busy_midi_operation(self) -> None:
+        message = f"Eine MIDI-Übertragung läuft bereits: {self.midi_operations.active_label}."
+        self.midi_tab.set_status(message)
+        self.status.set(message)
+
+    def _set_midi_ui_active(
+        self,
+        active: bool,
+        *,
+        label: str = "",
+        cancellable: bool = False,
+    ) -> None:
+        self.midi_tab.set_operation_active(active, label=label, cancellable=cancellable)
+        self.bank_tab.set_midi_busy(active)
+
+    def _record_midi(self, token: OperationToken, message: str) -> None:
+        line = f"[MIDI {token.operation.value.upper()} #{token.job_id}] {message}"
+        _LOGGER.info(line)
+        self.diagnostics_tab.append(line)
+
+    def _begin_async_midi_operation(
+        self,
+        operation: MidiOperation,
+        *,
+        status: str,
+        thread_name: str,
+        worker_operation,
+        success,
+        error,
+        progress=None,
+        cancellable: bool = False,
+    ) -> bool:
+        token = self.midi_operations.try_begin(operation)
+        if token is None:
+            self._reject_busy_midi_operation()
+            return False
+
+        self._midi_success = success
+        self._midi_error = error
+        self._midi_progress = progress
+        self._set_midi_ui_active(
+            True,
+            label=self.midi_operations.active_label,
+            cancellable=cancellable,
+        )
+        self.midi_tab.set_status(status)
+        self.status.set(status)
+        self._record_midi(token, f"Start: {status}")
+
+        def report_progress(value: object) -> None:
+            self._midi_events.put(("progress", token, value))
+
+        def run_worker() -> None:
+            try:
+                result = worker_operation(token, report_progress)
+            except BaseException as exc:
+                self._midi_events.put(("error", token, exc))
+            else:
+                self._midi_events.put(("success", token, result))
+
+        thread = threading.Thread(target=run_worker, name=thread_name, daemon=True)
+        self._midi_thread = thread
+        try:
+            thread.start()
+        except BaseException:
+            self._midi_thread = None
+            self._midi_success = None
+            self._midi_error = None
+            self._midi_progress = None
+            self.midi_operations.finish(token)
+            self._set_midi_ui_active(False)
+            raise
+        return True
+
+    def _poll_midi_events(self) -> None:
+        while True:
+            try:
+                kind, token, payload = self._midi_events.get_nowait()
+            except queue.Empty:
+                break
+            if self.midi_operations.active_token != token:
+                _LOGGER.warning("Veraltetes MIDI-Ereignis für Job #%d ignoriert", token.job_id)
+                continue
+            if kind == "progress":
+                if self._midi_progress is not None:
+                    self._midi_progress(payload)
+                continue
+
+            success = self._midi_success
+            error = self._midi_error
+            self._midi_thread = None
+            self._midi_success = None
+            self._midi_error = None
+            self._midi_progress = None
+            if not self.midi_operations.finish(token):
+                continue
+            self._set_midi_ui_active(False)
+            if kind == "success":
+                self._record_midi(token, "Abgeschlossen")
+                if success is not None:
+                    success(payload)
+            else:
+                self._record_midi(token, f"Fehlgeschlagen: {payload}")
+                if error is not None:
+                    error(payload)
+
+        try:
+            if self.root.winfo_exists():
+                self._midi_poll_id = self.root.after(25, self._poll_midi_events)
+        except tk.TclError:
+            return
+
     def refresh_midi_ports(self, *, show_errors: bool = True) -> None:
+        token = self.midi_operations.try_begin(MidiOperation.PORT_REFRESH)
+        if token is None:
+            self._reject_busy_midi_operation()
+            return
+        self._set_midi_ui_active(True, label=self.midi_operations.active_label)
+        self._record_midi(token, "MIDI-Ports werden aktualisiert")
         try:
             output_ports = list_midi_output_ports()
             input_ports = list_midi_input_ports()
@@ -775,10 +913,20 @@ class MainWindow:
             self.midi_tab.set_status(f"MIDI nicht verfügbar: {exc}")
             if show_errors:
                 self._show_error("MIDI-Ports konnten nicht gelesen werden", exc)
+        finally:
+            self._record_midi(token, "Portaktualisierung beendet")
+            self.midi_operations.finish(token)
+            self._set_midi_ui_active(False)
 
     def test_selected_midi_ports(self) -> None:
+        token = self.midi_operations.try_begin(MidiOperation.PORT_TEST)
+        if token is None:
+            self._reject_busy_midi_operation()
+            return
+        self._set_midi_ui_active(True, label=self.midi_operations.active_label)
         try:
             output_name, input_name, _device_id = self.midi_tab.selected_bank_settings()
+            self._record_midi(token, f"Teste Ausgang '{output_name}' und Eingang '{input_name}'")
             test_midi_output_port(output_name)
             test_midi_input_port(input_name)
             message = (
@@ -789,8 +937,15 @@ class MainWindow:
             self.status.set("MIDI-Ein-/Ausgangstest erfolgreich")
         except Exception as exc:
             self._show_error("MIDI-Ein-/Ausgangstest fehlgeschlagen", exc)
+        finally:
+            self._record_midi(token, "Porttest beendet")
+            self.midi_operations.finish(token)
+            self._set_midi_ui_active(False)
 
     def send_selected_to_buffer(self) -> None:
+        if self.midi_operations.is_busy:
+            self._reject_busy_midi_operation()
+            return
         index = self._single_occupied_index()
         if index is None:
             return
@@ -799,36 +954,57 @@ class MainWindow:
             port_name, device_id, delay_ms = self.midi_tab.selected_preview_settings()
             if not port_name:
                 raise MidiTransferError("Bitte zuerst im MIDI-Tab einen Ausgang auswählen")
+        except Exception as exc:
+            self._show_error("Patch konnte nicht in den Temporary Buffer gesendet werden", exc)
+            return
 
-            def show_progress(current: int, total: int) -> None:
-                self.midi_tab.set_status(f"Sende DT1-Nachricht {current} von {total} an '{port_name}' …")
-                self.root.update_idletasks()
-
-            report = send_temporary_patch(
+        self._begin_async_midi_operation(
+            MidiOperation.PREVIEW,
+            status=f"Sende „{patch.name}“ an den D-50 Temporary Buffer …",
+            thread_name="D50PatchPreview",
+            worker_operation=lambda token, progress: send_temporary_patch(
                 patch,
                 port_name=port_name,
                 device_id=device_id,
                 delay_ms=delay_ms,
-                progress=show_progress,
-            )
-            message = (
-                f"'{report.patch_name}' wurde mit {report.message_count} DT1-Nachrichten "
-                f"({report.data_byte_count} Patchbytes) in den Temporary Buffer gesendet. "
-                "Experimentelle Vorschau: Partials, Layer oder Splits können am realen D-50 "
-                "abweichend initialisiert werden. Interne Patchplätze und Reverbs wurden nicht adressiert."
-            )
-            self.midi_tab.set_status(message)
-            self.status.set(f"Patch im D-50-Buffer: {patch.name}")
-        except Exception as exc:
-            self._show_error("Patch konnte nicht in den Temporary Buffer gesendet werden", exc)
+                progress=lambda current, total: progress(("frame", current, total)),
+                job_id=token.job_id,
+                diagnostic=lambda message: progress(("log", message)),
+            ),
+            progress=lambda value: self._show_preview_progress(port_name, value),
+            success=self._finish_preview_success,
+            error=lambda exc: self._show_error("Patch-Vorschau fehlgeschlagen", exc),
+        )
+
+    def _show_preview_progress(self, port_name: str, value: object) -> None:
+        kind, *payload = value  # type: ignore[misc]
+        if kind == "log":
+            self.diagnostics_tab.append(payload[0])
+            return
+        current, total = payload
+        self.midi_tab.set_progress("Patch-Vorschau", current, total)
+        self.midi_tab.set_status(f"Sende DT1-Nachricht {current} von {total} an '{port_name}' …")
+
+    def _finish_preview_success(self, report) -> None:
+        message = (
+            f"„{report.patch_name}“ wurde mit {report.message_count} DT1-Nachrichten "
+            f"({report.data_byte_count} Patchbytes) gesendet. Der Empfang wurde vom D-50 nicht bestätigt. "
+            "Die Vorschau bleibt experimentell; interne Patchplätze und Reverbs wurden nicht adressiert."
+        )
+        self.midi_tab.set_status(message)
+        self.midi_tab.reset_progress("Patch-Vorschau abgeschlossen")
+        self.status.set(f"Patch-Vorschau gesendet: {report.patch_name}")
 
     @property
     def bank_transfer_active(self) -> bool:
-        return self._bank_transfer_thread is not None and self._bank_transfer_thread.is_alive()
+        return self.midi_operations.active_operation in {
+            MidiOperation.BANK_SEND,
+            MidiOperation.BANK_RECEIVE,
+        }
 
     def send_bank_to_d50(self) -> None:
-        if self.bank_transfer_active:
-            self.status.set("Es läuft bereits eine MIDI-Bankübertragung")
+        if self.midi_operations.is_busy:
+            self._reject_busy_midi_operation()
             return
         if not self.project.has_complete_reverbs:
             messagebox.showerror(
@@ -865,21 +1041,23 @@ class MainWindow:
             return
 
         self._begin_bank_transfer(
+            MidiOperation.BANK_SEND,
             status="Handshake mit D-50 B.Load wird gestartet…",
-            operation=lambda progress, cancelled: send_full_bank_handshake(
+            operation=lambda progress, cancelled, job_id: send_full_bank_handshake(
                 bank,
                 output_port_name=output_name,
                 input_port_name=input_name,
                 device_id=device_id,
                 progress=progress,
                 cancelled=cancelled,
+                job_id=job_id,
             ),
             success=self._finish_bank_send,
         )
 
     def receive_bank_from_d50(self) -> None:
-        if self.bank_transfer_active:
-            self.status.set("Es läuft bereits eine MIDI-Bankübertragung")
+        if self.midi_operations.is_busy:
+            self._reject_busy_midi_operation()
             return
         if not self._ask_save_if_dirty():
             return
@@ -900,45 +1078,39 @@ class MainWindow:
             return
 
         self._begin_bank_transfer(
+            MidiOperation.BANK_RECEIVE,
             status="MIDI-Ports geöffnet; jetzt am D-50 B.Dump starten…",
-            operation=lambda progress, cancelled: receive_full_bank_handshake(
+            operation=lambda progress, cancelled, job_id: receive_full_bank_handshake(
                 output_port_name=output_name,
                 input_port_name=input_name,
                 device_id=device_id,
                 label="D-50 MIDI Bank",
                 progress=progress,
                 cancelled=cancelled,
+                job_id=job_id,
             ),
             success=self._finish_bank_receive,
         )
 
-    def _begin_bank_transfer(self, *, status: str, operation, success) -> None:
+    def _begin_bank_transfer(self, midi_operation: MidiOperation, *, status: str, operation, success) -> None:
         self._bank_cancel_event.clear()
-        self.midi_tab.set_transfer_active(True)
         self.midi_tab.reset_progress("Handshake wird vorbereitet")
-        self.midi_tab.set_status(status)
-        self.status.set(status)
-
-        def progress(phase: str, current: int, total: int) -> None:
-            self.root.after(0, lambda: self.midi_tab.set_progress(phase, current, total))
-
-        def worker() -> None:
-            try:
-                result = operation(progress, self._bank_cancel_event.is_set)
-            except BaseException as exc:
-                self.root.after(0, lambda error=exc: self._finish_bank_transfer_error(error))
-            else:
-                self.root.after(0, lambda value=result: success(value))
-
-        self._bank_transfer_thread = threading.Thread(target=worker, name="D50BankTransfer", daemon=True)
-        self._bank_transfer_thread.start()
-
-    def _finish_bank_transfer_ui(self) -> None:
-        self._bank_transfer_thread = None
-        self.midi_tab.set_transfer_active(False)
+        self._begin_async_midi_operation(
+            midi_operation,
+            status=status,
+            thread_name="D50BankTransfer",
+            worker_operation=lambda token, progress: operation(
+                lambda phase, current, total: progress((phase, current, total)),
+                self._bank_cancel_event.is_set,
+                token.job_id,
+            ),
+            progress=lambda value: self.midi_tab.set_progress(*value),
+            success=success,
+            error=self._finish_bank_transfer_error,
+            cancellable=True,
+        )
 
     def _finish_bank_send(self, report: BankSendReport) -> None:
-        self._finish_bank_transfer_ui()
         message = (
             f"Bank '{report.bank_label}' vollständig gesendet: {report.data_message_count} DAT-Blöcke, "
             f"{report.data_byte_count} Byte, jeder Block vom D-50 bestätigt."
@@ -949,13 +1121,17 @@ class MainWindow:
         messagebox.showinfo("Bankübertragung abgeschlossen", message, parent=self.root)
 
     def _finish_bank_receive(self, report: BankReceiveReport) -> None:
-        self._finish_bank_transfer_ui()
-        self.editor.replace_project(BankProject.from_bank(report.bank))
-        self.editor.dirty = True
+        self.editor.replace_project(BankProject.from_bank(report.bank), mark_dirty=True)
         self.selection = {0}
         self.bank_tab.matrix.set_selection(self.selection, notify=False)
+        duplicate_note = (
+            f" · {report.duplicate_data_message_count} Dublette(n)"
+            if report.duplicate_data_message_count
+            else ""
+        )
         self.refresh(
-            f"D-50-Bank empfangen: {report.data_message_count} DAT-Blöcke / {report.data_byte_count} Byte"
+            f"D-50-Bank empfangen: {report.unique_data_block_count} eindeutige DAT-Blöcke / "
+            f"{report.data_byte_count} Byte{duplicate_note}"
         )
         self.midi_tab.set_status(
             "Vollständige D-50-Bank empfangen und geprüft. Bitte als Projekt oder SysEx sichern."
@@ -968,7 +1144,6 @@ class MainWindow:
         )
 
     def _finish_bank_transfer_error(self, exc: BaseException) -> None:
-        self._finish_bank_transfer_ui()
         if isinstance(exc, BankTransferCancelled):
             self.midi_tab.set_status("Bankübertragung wurde abgebrochen.")
             self.midi_tab.reset_progress("Abgebrochen")
@@ -984,12 +1159,18 @@ class MainWindow:
         self.midi_tab.set_status("Abbruch angefordert; Handshake wird sicher beendet…")
 
     def show_context_menu(self, index: int, x: int, y: int) -> None:
+        if self.selection != {index}:
+            self.selection = {index}
+            self.bank_tab.matrix.set_selection(self.selection, notify=False)
+            self.bank_tab.matrix.refresh(self.project)
+            self._refresh_details()
         occupied = self.project.slots[index] is not None
         menu = tk.Menu(self.root, tearoff=False)
         if occupied:
             menu.add_command(
                 label="Vorhören (experimentell): Dump into Buffer",
                 command=self.send_selected_to_buffer,
+                state="disabled" if self.midi_operations.is_busy else "normal",
             )
             menu.add_command(label=tr("save_single"), command=self.save_selected_single)
             menu.add_command(label=tr("rename"), command=self.rename_selected)
@@ -1007,7 +1188,10 @@ class MainWindow:
             menu.add_separator()
             menu.add_command(label=tr("import_patches"), command=self.import_singles)
             menu.add_command(label=tr("paste"), command=self.paste)
-        menu.tk_popup(x, y)
+        try:
+            menu.tk_popup(x, y)
+        finally:
+            menu.grab_release()
 
     def _ask_target_slot(self, title: str, source: int) -> int | None:
         value = simpledialog.askstring(
@@ -1071,14 +1255,18 @@ class MainWindow:
         )
 
     def close(self) -> None:
-        if self.bank_transfer_active:
+        if self.midi_operations.is_busy:
             messagebox.showwarning(
-                "Bankübertragung läuft",
-                "Bitte zuerst die MIDI-Bankübertragung abbrechen und auf das Ende des Handshakes warten.",
+                "MIDI-Operation läuft",
+                f"Bitte zuerst '{self.midi_operations.active_label}' beenden und auf den Abschluss warten.",
                 parent=self.root,
             )
             return
         if self._ask_save_if_dirty():
+            try:
+                self.root.after_cancel(self._midi_poll_id)
+            except (AttributeError, tk.TclError):
+                pass
             self.root.destroy()
 
 

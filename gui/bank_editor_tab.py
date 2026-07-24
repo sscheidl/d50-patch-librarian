@@ -116,3 +116,6 @@ class BankEditorTab(ttk.Frame):
             reverb_summary += f" · {project.reverb_missing_count} Quelle(n) unbekannt"
         self.reverb_var.set(reverb_summary)
         self.source_var.set(project.source_bank_path or project.project_path or "Keine Quelldatei")
+
+    def set_midi_busy(self, busy: bool) -> None:
+        self.details.set_midi_busy(busy)

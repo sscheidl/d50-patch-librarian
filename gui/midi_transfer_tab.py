@@ -29,6 +29,7 @@ class MidiTransferTab(ttk.Frame):
         self.status_var = tk.StringVar(value="Noch keine MIDI-Bankübertragung ausgeführt")
         self.progress_var = tk.DoubleVar(value=0)
         self.progress_text_var = tk.StringVar(value="Bereit")
+        self.activity_var = tk.StringVar(value="MIDI bereit")
 
         ttk.Label(self, text="MIDI / vollständige Bank", font=("Segoe UI Semibold", 18)).pack(anchor="w")
         ttk.Label(
@@ -124,6 +125,12 @@ class MidiTransferTab(ttk.Frame):
             justify="left",
             foreground="#444444",
         ).pack(anchor="w", pady=(6, 0))
+        ttk.Label(
+            progress_frame,
+            textvariable=self.activity_var,
+            foreground="#7a5200",
+            font=("Segoe UI Semibold", 10),
+        ).pack(anchor="w", pady=(6, 0))
 
         self._idle_widgets = (
             self.output_port_box,
@@ -164,13 +171,14 @@ class MidiTransferTab(ttk.Frame):
         reverb_text = "Reverbs vollständig" if reverbs_complete else "Reverbs fehlen"
         self.bank_var.set(f"{label} · {occupied}/64 Patches · {empty} leer · {reverb_text}")
 
-    def set_transfer_active(self, active: bool) -> None:
+    def set_operation_active(self, active: bool, *, label: str = "", cancellable: bool = False) -> None:
         for widget in self._idle_widgets:
             if isinstance(widget, ttk.Combobox):
                 widget.configure(state="disabled" if active else "readonly")
             else:
                 widget.configure(state="disabled" if active else "normal")
-        self.cancel_button.configure(state="normal" if active else "disabled")
+        self.cancel_button.configure(state="normal" if active and cancellable else "disabled")
+        self.activity_var.set(f"MIDI beschäftigt: {label}" if active else "MIDI bereit")
 
     def set_progress(self, phase: str, current: int, total: int) -> None:
         maximum = max(1, total)

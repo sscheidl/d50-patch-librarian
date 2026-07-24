@@ -98,3 +98,75 @@ def test_sender_rejects_unsafe_settings(valid_single_bytes: bytes) -> None:
             device_id=0x10,
             backend=FakeBackend(),
         )
+
+
+class FailingClosePort(FakePort):
+    def __init__(self, *, fail_send: bool) -> None:
+        super().__init__()
+        self.fail_send = fail_send
+        self.close_calls = 0
+
+    def send_sysex(self, frame: bytes) -> None:
+        if self.fail_send:
+            raise RuntimeError("send failure")
+        super().send_sysex(frame)
+
+    def close(self) -> None:
+        self.close_calls += 1
+        raise RuntimeError("close failure")
+
+
+class SinglePortBackend(FakeBackend):
+    def __init__(self, port: FakePort) -> None:
+        self.port = port
+        self.opened_name = None
+
+
+def test_close_error_does_not_hide_primary_send_error(valid_single_bytes: bytes) -> None:
+    patch = parse_single_patch(valid_single_bytes)
+    port = FailingClosePort(fail_send=True)
+
+    with pytest.raises(MidiTransferError, match="send failure"):
+        send_temporary_patch(
+            patch,
+            port_name="D-50 TEST OUT",
+            device_id=0,
+            backend=SinglePortBackend(port),
+            sleeper=lambda _seconds: None,
+        )
+    assert port.close_calls == 1
+
+
+def test_close_error_is_reported_when_send_succeeded(valid_single_bytes: bytes) -> None:
+    patch = parse_single_patch(valid_single_bytes)
+    port = FailingClosePort(fail_send=False)
+
+    with pytest.raises(MidiTransferError, match="geschlossen"):
+        send_temporary_patch(
+            patch,
+            port_name="D-50 TEST OUT",
+            device_id=0,
+            backend=SinglePortBackend(port),
+            sleeper=lambda _seconds: None,
+        )
+    assert port.close_calls == 1
+
+
+def test_sender_emits_bounded_diagnostics_without_sysex_hex(valid_single_bytes: bytes) -> None:
+    patch = parse_single_patch(valid_single_bytes)
+    messages: list[str] = []
+
+    send_temporary_patch(
+        patch,
+        port_name="D-50 TEST OUT",
+        device_id=0,
+        backend=FakeBackend(),
+        sleeper=lambda _seconds: None,
+        job_id=17,
+        diagnostic=messages.append,
+    )
+
+    assert messages[0].startswith("[TX PREVIEW #17] Start")
+    assert sum("Frame " in message for message in messages) == 7
+    assert "address=00-03-00 data=64 Byte" in messages[-2]
+    assert messages[-1].startswith("[TX PREVIEW #17] Complete")
