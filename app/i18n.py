@@ -26,14 +26,12 @@ STRINGS: dict[str, str] = {
     "paste": "Einfügen",
     "duplicate": "Duplizieren nach…",
     "move": "Verschieben/Tauschen nach…",
-    "clear": "Slot leeren",
+    "clear": "Platz leeren (INIT SAW)",
     "delete_shift": "Löschen und nachrücken",
     "empty": "leer",
     "ready": "Bereit",
-    "phase3": "MIDI-Senden und -Empfangen wird in Phase 3/4 aktiviert.",
 }
 
 
 def tr(key: str, **values: object) -> str:
     return STRINGS.get(key, key).format(**values)
-

@@ -24,6 +24,8 @@ class BankEditorTab(ttk.Frame):
         on_metadata,
         on_rename,
         on_save_single,
+        on_preview,
+        on_new_patch: Callable[[], None],
         on_import_singles: Callable[[], None],
         on_import_bank: Callable[[], None],
         on_take_reverbs: Callable[[], None],
@@ -53,12 +55,26 @@ class BankEditorTab(ttk.Frame):
         ttk.Button(source, text="Einzelpatches importieren…", command=on_import_singles).pack(fill="x", pady=3)
         ttk.Button(source, text="Patches aus Bank…", command=on_import_bank).pack(fill="x", pady=3)
         ttk.Button(source, text="Reverbs aus Bank…", command=on_take_reverbs).pack(fill="x", pady=3)
+        ttk.Button(source, text="INIT SAW einsetzen", command=on_new_patch).pack(fill="x", pady=(10, 3))
+        ttk.Separator(source).pack(fill="x", pady=10)
+        ttk.Label(source, text="Reverbstatus", font=("Segoe UI Semibold", 10)).pack(anchor="w")
+        legend = (
+            ("#ffffff", "Weiß: Reverb 1–16 fest"),
+            ("#e2f0d9", "Grün: Bank-Reverb vorhanden"),
+            ("#fff3cd", "Gelb: Bank-Reverb fehlt"),
+            ("#f8d7da", "Rot: Reverbkonflikt"),
+        )
+        for color, text in legend:
+            row = ttk.Frame(source)
+            row.pack(fill="x", pady=1)
+            tk.Label(row, background=color, width=2, relief="solid", borderwidth=1).pack(side="left")
+            ttk.Label(row, text=text).pack(side="left", padx=(6, 0))
         ttk.Separator(source).pack(fill="x", pady=10)
         ttk.Label(
             source,
             text=(
                 "Tipp:\nStrg/Shift = Mehrfachauswahl\n"
-                "Ziehen = Verschieben/Tauschen\nF2 = Umbenennen\nEntf = Slot leeren"
+                "Ziehen = Verschieben/Tauschen\nF2 = Umbenennen\nEntf = auf INIT SAW setzen"
             ),
             foreground="#555555",
             justify="left",
@@ -82,6 +98,7 @@ class BankEditorTab(ttk.Frame):
             on_apply=on_metadata,
             on_rename=on_rename,
             on_save_single=on_save_single,
+            on_preview=on_preview,
         )
         self.details.grid(row=0, column=2, sticky="nsew", padx=(8, 0))
         self.details.configure(width=330)
@@ -90,8 +107,15 @@ class BankEditorTab(ttk.Frame):
     def refresh_summary(self, project: BankProject) -> None:
         self.project_name_var.set(project.label)
         self.patch_count_var.set(f"{project.occupied_count} belegt / {project.empty_count} leer")
-        self.reverb_var.set(
+        reverb_summary = (
             "Reverb-Basis 17–32 vollständig" if project.has_complete_reverbs else "Reverb-Basis 17–32 fehlt"
         )
+        if project.reverb_conflict_count:
+            reverb_summary += f" · {project.reverb_conflict_count} Konflikt(e)"
+        if project.reverb_missing_count:
+            reverb_summary += f" · {project.reverb_missing_count} Quelle(n) unbekannt"
+        self.reverb_var.set(reverb_summary)
         self.source_var.set(project.source_bank_path or project.project_path or "Keine Quelldatei")
 
+    def set_midi_busy(self, busy: bool) -> None:
+        self.details.set_midi_busy(busy)

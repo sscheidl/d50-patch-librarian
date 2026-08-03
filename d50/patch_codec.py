@@ -68,6 +68,104 @@ def decode_patch(
     )
 
 
+def create_init_patch(*, source_device_id: int | None = None) -> D50Patch:
+    """Create the canonical, audible INIT SAW used throughout the librarian."""
+    raw = bytearray(PATCH_SIZE)
+
+    # All four Partial blocks contain a valid, neutral saw. The tone-level mute
+    # flags below make only Upper Partial 1 audible. Keeping inactive blocks valid
+    # also makes later sound editing predictable.
+    partial = _create_init_saw_partial()
+    raw[0:64] = partial
+    raw[64:128] = partial
+    raw[192:256] = partial
+    raw[256:320] = partial
+
+    raw[128:192] = _create_init_tone_common("INIT SAW", partial_mute=1)
+    raw[320:384] = _create_init_tone_common("INIT OFF", partial_mute=0)
+    raw[384:448] = _create_init_patch_common()
+
+    return decode_patch(
+        bytes(raw),
+        source_device_id=source_device_id,
+        source_bank="Built-in INIT SAW",
+    )
+
+
+def _create_init_saw_partial() -> bytes:
+    """Return one neutral 64-byte synth Partial using the saw waveform."""
+    data = bytearray(64)
+    data[0x00] = 24  # normal oscillator octave (Roland factory Init Saw baseline)
+    data[0x01] = 50  # fine tune 0
+    data[0x02] = 11  # pitch keyfollow 1:1
+    data[0x06] = 1  # synthesizer sawtooth
+    data[0x09] = 7  # neutral pulse-width velocity modulation
+    data[0x0A] = 50  # neutral pulse width (irrelevant for saw)
+    data[0x0C] = 7  # neutral pulse-width aftertouch modulation
+
+    data[0x0D] = 100  # TVF cutoff fully open
+    data[0x0E] = 0  # resonance off
+    data[0x0F] = 11  # TVF keyfollow 1:1
+    data[0x10] = 27  # centered TVF bias point
+    data[0x11] = 7  # neutral TVF bias level
+    data[0x12] = 0  # TVF envelope depth off
+    data[0x22] = 7  # neutral TVF aftertouch modulation
+
+    data[0x23] = 100  # TVA level
+    data[0x24] = 50  # neutral velocity range
+    data[0x25] = 27  # centered TVA bias point
+    data[0x26] = 12  # neutral TVA bias level
+    data[0x27:0x2C] = bytes((0, 50, 50, 50, 20))  # immediate attack, moderate release
+    data[0x2C:0x31] = bytes((100, 100, 100, 100, 0))
+    data[0x31] = 0  # envelope velocity follow off
+    data[0x32] = 0  # envelope time keyfollow off
+    data[0x34] = 0  # TVA LFO depth off
+    data[0x35] = 7  # neutral TVA aftertouch modulation
+    return bytes(data)
+
+
+def _create_init_tone_common(name: str, *, partial_mute: int) -> bytes:
+    """Return neutral tone-common data with an explicit Partial activation mask."""
+    data = bytearray(64)
+    data[0:10] = encode_name(name, length=TONE_NAME_LENGTH, field="Tone-Name")
+    data[0x0A] = 0  # Structure 1
+    data[0x11:0x16] = bytes((50, 50, 50, 50, 50))  # neutral pitch-envelope levels
+    data[0x16] = 0  # pitch LFO depth off
+    data[0x17] = 0  # lever modulation off
+    data[0x18] = 0  # pitch aftertouch modulation off
+    data[0x26] = 12  # neutral low EQ gain
+    data[0x29] = 12  # neutral high EQ gain
+    data[0x2D] = 0  # chorus dry/off
+    data[0x2E] = partial_mute
+    data[0x2F] = 50  # centered Partial balance
+    return bytes(data)
+
+
+def _create_init_patch_common() -> bytes:
+    """Return neutral patch-common data for a Whole-mode, dry INIT SAW."""
+    data = bytearray(64)
+    data[0:PATCH_NAME_LENGTH] = encode_name(
+        "INIT SAW",
+        length=PATCH_NAME_LENGTH,
+        field="Patchname",
+    )
+    data[0x12] = 0  # Whole mode: Upper Tone only
+    data[0x13] = 24  # neutral split point (unused in Whole mode)
+    data[0x16] = 24  # Upper key shift 0
+    data[0x17] = 24  # Lower key shift 0
+    data[0x18] = 50  # Upper fine tune 0
+    data[0x19] = 50  # Lower fine tune 0
+    data[0x1A] = 0  # bender range off
+    data[0x1B] = 12  # neutral aftertouch pitch
+    data[0x1C] = 0  # portamento time 0
+    data[0x1D] = 0  # output mode 1
+    data[0x1E] = 0  # Reverb Type 1
+    data[0x1F] = 0  # reverb dry/off
+    data[0x20] = 100  # normal total volume
+    data[0x21] = 50  # centered Upper/Lower balance
+    return bytes(data)
+
+
 def rename_patch(patch: D50Patch, new_name: str) -> D50Patch:
     updated = bytearray(patch.raw)
     updated[PATCH_NAME_OFFSET : PATCH_NAME_OFFSET + PATCH_NAME_LENGTH] = encode_name(

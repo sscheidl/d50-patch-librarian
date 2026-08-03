@@ -12,7 +12,7 @@ from .reverb import D50Reverb
 class D50Bank:
     patches: tuple[D50Patch, ...]
     reverbs: tuple[D50Reverb, ...]
-    device_id: int = 0x10
+    device_id: int = 0x00
     label: str = "Unbenannte Bank"
     raw_source: bytes | None = None
 
@@ -25,4 +25,3 @@ class D50Bank:
             raise ValueError("Device ID muss zwischen 00h und 1Fh liegen")
         if tuple(reverb.number for reverb in self.reverbs) != tuple(range(17, 33)):
             raise ValueError("Reverbblöcke müssen lückenlos in der Reihenfolge 17 bis 32 vorliegen")
-

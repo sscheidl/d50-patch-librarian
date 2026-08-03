@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from domain.enums import DumpType
 from domain.errors import UnsupportedDumpError, ValidationIssue
 from domain.patch import D50Patch
@@ -17,7 +19,27 @@ from .constants import (
     TEMP_PATCH_START,
 )
 from .patch_codec import decode_patch
-from .sysex_frames import build_dt1_frame
+from .sysex_frames import build_dt1_frame, parse_dt1_frame, parse_sysex_stream
+
+
+PREVIEW_BLOCK_NAMES = (
+    "Upper Partial 1",
+    "Upper Partial 2",
+    "Upper Common",
+    "Lower Partial 1",
+    "Lower Partial 2",
+    "Lower Common",
+    "Patch",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class PreviewBlock:
+    name: str
+    address: tuple[int, int, int]
+    device_id: int
+    data: bytes
+    checksum: int
 
 
 def parse_single_patch(data: bytes, *, source_bank: str | None = None) -> D50Patch:
@@ -63,3 +85,38 @@ def serialize_single_patch(patch: D50Patch, *, device_id: int | None = None) -> 
             )
         )
     return b"".join(frames)
+
+
+def extract_preview_blocks(stream: bytes) -> tuple[PreviewBlock, ...]:
+    """Return and validate the seven logical Temporary-Area blocks."""
+    result = parse_sysex_stream(stream, strict=True)
+    if len(result.frames) != len(TEMP_PATCH_BLOCK_ADDRESSES):
+        raise ValueError(
+            f"Preview-SysEx muss genau sieben DT1-Nachrichten enthalten, erhalten: {len(result.frames)}"
+        )
+    blocks: list[PreviewBlock] = []
+    for index, (frame, name, expected_address) in enumerate(
+        zip(result.frames, PREVIEW_BLOCK_NAMES, TEMP_PATCH_BLOCK_ADDRESSES, strict=True),
+        start=1,
+    ):
+        message = parse_dt1_frame(frame, index=index)
+        if message.address != expected_address:
+            raise ValueError(
+                f"Preview-Block {index} hat Adresse {message.address}, erwartet {expected_address}"
+            )
+        if len(message.data) != PATCH_BLOCK_SIZE:
+            raise ValueError(
+                f"Preview-Block {index} enthält {len(message.data)} statt {PATCH_BLOCK_SIZE} Datenbytes"
+            )
+        blocks.append(
+            PreviewBlock(
+                name=name,
+                address=message.address,
+                device_id=message.device_id,
+                data=message.data,
+                checksum=message.checksum,
+            )
+        )
+    if sum(len(block.data) for block in blocks) != PATCH_SIZE:
+        raise AssertionError("Preview-Blöcke enthalten nicht exakt 448 Patchbytes")
+    return tuple(blocks)

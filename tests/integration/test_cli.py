@@ -52,3 +52,15 @@ def test_cli_canonicalize_refuses_implicit_overwrite(tmp_path: Path, fixture_dir
     assert target.stat().st_size == 518
     assert main(["canonicalize", str(source), str(target)]) == 2
     assert "existiert bereits" in capsys.readouterr().err
+
+
+def test_cli_diagnoses_all_64_preview_roundtrips(fixture_dir: Path, capsys) -> None:
+    result = main(["diagnose-preview-roundtrip", str(fixture_dir / "valid_full_bank.syx")])
+    output = capsys.readouterr()
+
+    assert result == 0
+    assert "Patches geprüft: 64" in output.out
+    assert "Mit Differenz: 0" in output.out
+    assert "Ungültig: 0" in output.out
+    assert "64 von 64 Patches ohne Roundtrip-Differenz." in output.out
+    assert output.err == ""

@@ -8,12 +8,16 @@ from tkinter import ttk
 
 from domain.project import BankProject
 
+from .reverb_display import present_reverb_status
+
 SelectionCallback = Callable[[set[int]], None]
 IndexCallback = Callable[[int], None]
 MoveCallback = Callable[[int, int], None]
 
 
 class BankMatrix(ttk.Frame):
+    DRAG_THRESHOLD_PIXELS = 6
+
     def __init__(
         self,
         master: tk.Misc,
@@ -31,12 +35,17 @@ class BankMatrix(ttk.Frame):
         self.selected: set[int] = {0}
         self.anchor = 0
         self.drag_source: int | None = None
+        self.drag_origin: tuple[int, int] | None = None
+        self.drag_active = False
+        self.drag_target: int | None = None
+        self._occupied_indices: set[int] = set()
         self.buttons: list[tk.Button] = []
         self._widget_indices: dict[tk.Misc, int] = {}
 
+        for column in range(8):
+            self.columnconfigure(column, weight=1, uniform="slots")
         for row in range(8):
             self.rowconfigure(row, weight=1, uniform="slots")
-            self.columnconfigure(row, weight=1, uniform="slots")
             for column in range(8):
                 index = row * 8 + column
                 button = tk.Button(
@@ -54,6 +63,7 @@ class BankMatrix(ttk.Frame):
                 )
                 button.grid(row=row, column=column, sticky="nsew", padx=2, pady=2)
                 button.bind("<ButtonPress-1>", lambda event, i=index: self._press(event, i))
+                button.bind("<B1-Motion>", lambda event, i=index: self._motion(event, i))
                 button.bind("<ButtonRelease-1>", lambda event, i=index: self._release(event, i))
                 button.bind("<Double-Button-1>", lambda _event, i=index: self.on_activate(i))
                 button.bind("<Button-3>", lambda event, i=index: self._context(event, i))
@@ -87,21 +97,53 @@ class BankMatrix(ttk.Frame):
         else:
             self.selected = {index}
             self.anchor = index
-        self.drag_source = index
+        can_drag = len(self.selected) == 1 and index in self._occupied_indices
+        self.drag_source = index if can_drag else None
+        self.drag_origin = (event.x_root, event.y_root) if can_drag else None
+        self.drag_active = False
+        self._set_drag_target(None)
         self.on_selection(set(self.selected))
+        return "break"
+
+    def _motion(self, event: tk.Event, _index: int) -> str:
+        if self.drag_source is None or self.drag_origin is None:
+            return "break"
+        delta_x = event.x_root - self.drag_origin[0]
+        delta_y = event.y_root - self.drag_origin[1]
+        if not self.drag_active and delta_x * delta_x + delta_y * delta_y < self.DRAG_THRESHOLD_PIXELS**2:
+            return "break"
+        self.drag_active = True
+        target_widget = self.winfo_containing(event.x_root, event.y_root)
+        target = self._index_for_widget(target_widget)
+        self._set_drag_target(target if target != self.drag_source else None)
         return "break"
 
     def _release(self, event: tk.Event, index: int) -> str:
         target_widget = self.winfo_containing(event.x_root, event.y_root)
         target = self._index_for_widget(target_widget)
         source = self.drag_source
+        active = self.drag_active
         self.drag_source = None
-        if source is not None and target is not None and source != target:
+        self.drag_origin = None
+        self.drag_active = False
+        self._set_drag_target(None)
+        if active and source is not None and target is not None and source != target:
             self.on_move(source, target)
-            self.selected = {target}
-            self.anchor = target
-            self.on_selection(set(self.selected))
         return "break"
+
+    def _set_drag_target(self, index: int | None) -> None:
+        if self.drag_target == index:
+            return
+        previous = self.drag_target
+        self.drag_target = index
+        if previous is not None:
+            self.buttons[previous].configure(highlightthickness=0)
+        if index is not None:
+            self.buttons[index].configure(
+                highlightthickness=3,
+                highlightbackground="#0d6efd",
+                highlightcolor="#0d6efd",
+            )
 
     def _index_for_widget(self, widget: tk.Misc | None) -> int | None:
         current = widget
@@ -122,6 +164,7 @@ class BankMatrix(ttk.Frame):
         return "break"
 
     def refresh(self, project: BankProject) -> None:
+        self._occupied_indices = set(project.occupied_indices())
         for index, button in enumerate(self.buttons):
             slot = project.slots[index]
             row, column = divmod(index, 8)
@@ -131,12 +174,12 @@ class BankMatrix(ttk.Frame):
                 background = "#f1f1f1"
                 foreground = "#777777"
             else:
-                warning = " !" if slot.patch.reverb_type >= 17 else ""
+                presentation = present_reverb_status(slot.patch.reverb_status)
                 text = (
-                    f"{slot_label}  R{slot.patch.reverb_type:02d}{warning}\n"
+                    f"{slot_label}  R{slot.patch.reverb_type:02d}{presentation.marker}\n"
                     f"{slot.patch.name or '(ohne Namen)'}"
                 )
-                background = "#fff3cd" if warning else "#ffffff"
+                background = presentation.background
                 foreground = "#202020"
             if index in self.selected:
                 background = "#cfe2ff"
@@ -152,4 +195,7 @@ class BankMatrix(ttk.Frame):
                 foreground=foreground,
                 relief=relief,
                 borderwidth=borderwidth,
+                highlightthickness=3 if index == self.drag_target else 0,
+                highlightbackground="#0d6efd",
+                highlightcolor="#0d6efd",
             )

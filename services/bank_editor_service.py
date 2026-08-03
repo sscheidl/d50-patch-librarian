@@ -18,10 +18,10 @@ class BankEditorService:
         self.clipboard: tuple[PatchSlot, ...] = ()
         self.dirty = False
 
-    def replace_project(self, project: BankProject) -> None:
+    def replace_project(self, project: BankProject, *, mark_dirty: bool = False) -> None:
         self.project = project
         self.undo_stack.clear()
-        self.dirty = False
+        self.dirty = mark_dirty
 
     def mark_saved(self) -> None:
         self.dirty = False
@@ -67,6 +67,14 @@ class BankEditorService:
         normalized = sorted(set(indices))
         self._change(lambda: self.project.clear_slots(normalized))
 
+    def initialize(
+        self,
+        indices: list[int] | set[int] | tuple[int, ...],
+        patch: D50Patch,
+    ) -> None:
+        normalized = sorted(set(indices))
+        self._change(lambda: self.project.initialize_slots(normalized, patch))
+
     def delete_and_shift(self, index: int) -> None:
         self._change(lambda: self.project.delete_and_shift(index))
 
@@ -81,6 +89,24 @@ class BankEditorService:
 
         def operation() -> None:
             written.extend(self.project.insert_patches(patches, start_index=start_index))
+
+        self._change(operation)
+        return written
+
+    def import_bank_content(
+        self,
+        patches: list[D50Patch],
+        *,
+        start_index: int | None = None,
+        reverbs=None,
+    ) -> list[int]:
+        """Apply patches and an optional reverb basis as one undoable transaction."""
+        written: list[int] = []
+
+        def operation() -> None:
+            written.extend(self.project.insert_patches(patches, start_index=start_index))
+            if reverbs is not None:
+                self.project.set_reverbs(reverbs)
 
         self._change(operation)
         return written
