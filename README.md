@@ -4,6 +4,8 @@ Windows-Patch-Librarian für den Roland D-50. Version `0.2.1` implementiert die 
 definierten **Phasen 1 und 2**: einen strikt validierenden SysEx-Codec sowie einen grafischen
 8×8-Bankeditor mit Projekt-, Import-, Export- und Undo/Redo-Workflow.
 
+![Vorschau des D-50 Patch Librarian](https://taureon-music.de/images/taureon/dev_lab/D-50-librarian.png)
+
 Die Anwendung ist ein Librarian und Bankwerkzeug, **kein Soundparameter-Editor**. MIDI-Senden
 und -Empfangen folgen in Phase 3/4.
 
